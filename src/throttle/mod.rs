@@ -12,7 +12,16 @@ impl ThrottleBackend {
     pub fn resolve(explicit_cgroups: bool) -> Self {
         let is_root = nix::unistd::geteuid().is_root();
         if is_root {
-            ThrottleBackend::Cgroup(cgroup::CgroupThrottle::new())
+            match cgroup::CgroupThrottle::new() {
+                Ok(cg) => {
+                    tracing::info!("using cgroup v2 per-app-group throttling");
+                    ThrottleBackend::Cgroup(cg)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "cgroup init failed; using SIGSTOP/SIGCONT");
+                    ThrottleBackend::Signal
+                }
+            }
         } else {
             if explicit_cgroups {
                 tracing::warn!("cgroups require root; using SIGSTOP/SIGCONT");
@@ -23,6 +32,14 @@ impl ThrottleBackend {
 
     pub fn is_cgroup(&self) -> bool {
         matches!(self, ThrottleBackend::Cgroup(_))
+    }
+
+    pub fn mode_label(&self) -> &'static str {
+        if self.is_cgroup() {
+            "cgroup"
+        } else {
+            "signal"
+        }
     }
 }
 
@@ -40,33 +57,30 @@ pub fn resume_signal(pid: u32) {
 }
 
 impl ThrottleBackend {
-    pub async fn start_group_cgroup(
+    pub fn start_group(
         &mut self,
         group_key: u32,
         pids: &[u32],
         app_cap: f32,
         num_cores: usize,
-        cancel: CancellationToken,
     ) -> Result<(), String> {
-        if let ThrottleBackend::Cgroup(cg) = self {
-            cg.start_group(group_key, pids, app_cap, num_cores)?;
-            cancel.cancelled().await;
-            cg.stop_group(group_key);
-            Ok(())
-        } else {
-            Err("not a cgroup backend".into())
+        match self {
+            ThrottleBackend::Cgroup(cg) => cg.start_group(group_key, pids, app_cap, num_cores),
+            ThrottleBackend::Signal => Err("not a cgroup backend".into()),
         }
     }
 
-    pub async fn sync_group_cgroup(
-        &mut self,
-        group_key: u32,
-        pids: &[u32],
-    ) -> Result<(), String> {
-        if let ThrottleBackend::Cgroup(cg) = self {
-            cg.sync_group(group_key, pids)
-        } else {
-            Err("not a cgroup backend".into())
+    pub fn sync_group(&mut self, group_key: u32, pids: &[u32]) -> Result<(), String> {
+        match self {
+            ThrottleBackend::Cgroup(cg) => cg.sync_group(group_key, pids),
+            ThrottleBackend::Signal => Err("not a cgroup backend".into()),
+        }
+    }
+
+    pub fn update_all_caps(&mut self, app_cap: f32, num_cores: usize) -> Result<(), String> {
+        match self {
+            ThrottleBackend::Cgroup(cg) => cg.update_all_caps(app_cap, num_cores),
+            ThrottleBackend::Signal => Ok(()),
         }
     }
 

@@ -235,11 +235,12 @@ fn draw_ui(
 
     let machine_budget = crate::policy::machine_cpu_budget(state.app_cap, state.num_cores);
     let header = Paragraph::new(format!(
-        "System: {:.0}% | App cap: {:.0}% of machine ({:.0}% on {} cores, {mode_hint}) | [+/-] cap | [Up/Down] scroll | [q/Esc] quit",
+        "System: {:.0}% | App cap: {:.0}% ({:.0}%/{} cores) | {} ({mode_hint}) | [+/-] cap | [Up/Down] scroll | [q/Esc] quit",
         state.global_cpu,
         state.app_cap,
         machine_budget,
         state.num_cores,
+        state.throttle_backend,
     ))
     .block(
         Block::default()

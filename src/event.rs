@@ -62,9 +62,11 @@ pub fn spawn_event_hub(
 ) -> HubHandles {
     let (command_tx, mut command_rx) = mpsc::channel::<HubCommand>(256);
     let (throttle_tx, mut throttle_rx) = mpsc::channel::<ThrottleEvent>(64);
+    let backend_label = backend.mode_label().to_string();
     let (state_tx, state_rx) = watch::channel(AppState::new(
         initial_app_cap,
         initial_pressure_threshold,
+        backend_label.clone(),
     ));
     let (shutdown_tx, _) = watch::channel(false);
     let shutdown_notify = shutdown_tx.clone();
@@ -73,7 +75,11 @@ pub fn spawn_event_hub(
     let backend = std::sync::Arc::new(Mutex::new(backend));
 
     tokio::spawn(async move {
-        let mut state = AppState::new(initial_app_cap, initial_pressure_threshold);
+        let mut state = AppState::new(
+            initial_app_cap,
+            initial_pressure_threshold,
+            backend_label,
+        );
         let mut active: HashMap<u32, ActiveGroupThrottle> = HashMap::new();
 
         loop {
@@ -148,24 +154,24 @@ async fn handle_command(
 
             if use_cgroups {
                 tokio::spawn(async move {
-                    let mut guard = backend_clone.lock().await;
-                    if let Err(e) = guard
-                        .start_group_cgroup(
-                            group_key,
-                            &pids_for_task,
-                            app_cap,
-                            num_cores,
-                            cancel_clone,
-                        )
-                        .await
-                    {
+                    let start_result = {
+                        let mut guard = backend_clone.lock().await;
+                        guard.start_group(group_key, &pids_for_task, app_cap, num_cores)
+                    };
+                    if let Err(e) = start_result {
                         let _ = throttle_events
                             .send(ThrottleEvent::Error {
                                 group_key,
                                 message: e,
                             })
                             .await;
+                        return;
                     }
+
+                    cancel_clone.cancelled().await;
+
+                    let mut guard = backend_clone.lock().await;
+                    guard.stop_group(group_key, &pids_for_task).await;
                 });
             } else {
                 for pid in &pids {
@@ -213,8 +219,11 @@ async fn handle_command(
                 let pids_clone = pids.clone();
                 let throttle_events = throttle_tx.clone();
                 tokio::spawn(async move {
-                    let mut guard = backend_clone.lock().await;
-                    if let Err(e) = guard.sync_group_cgroup(group_key, &pids_clone).await {
+                    let result = {
+                        let mut guard = backend_clone.lock().await;
+                        guard.sync_group(group_key, &pids_clone)
+                    };
+                    if let Err(e) = result {
                         let _ = throttle_events
                             .send(ThrottleEvent::Error {
                                 group_key,
@@ -272,6 +281,12 @@ async fn handle_command(
         HubCommand::SetAppCap(app_cap) => {
             state.app_cap = crate::config::clamp_app_cap(app_cap);
             let _ = crate::config::Config::update_app_cap(state.app_cap);
+            if use_cgroups {
+                let mut guard = backend.lock().await;
+                if let Err(e) = guard.update_all_caps(state.app_cap, state.num_cores) {
+                    state.last_error = Some(format!("update cgroup caps: {e}"));
+                }
+            }
             broadcast(state_tx, state);
         }
         HubCommand::Quit => {

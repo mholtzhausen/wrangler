@@ -209,8 +209,11 @@ impl AttachSession {
         let stream = UnixStream::connect(socket_path()).await?;
         let (read_half, mut write_half) = stream.into_split();
         let (request_tx, mut request_rx) = mpsc::channel::<ClientRequest>(16);
-        let (state_tx, _state_rx) =
-            watch::channel(AppState::new(80.0, crate::config::DEFAULT_PRESSURE_THRESHOLD));
+        let (state_tx, _state_rx) = watch::channel(AppState::new(
+            80.0,
+            crate::config::DEFAULT_PRESSURE_THRESHOLD,
+            "signal",
+        ));
         let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
 
         let writer_task = tokio::spawn(async move {

@@ -3,7 +3,7 @@ BINARY := wrangler
 TARGET_DEBUG := target/debug/$(BINARY)
 TARGET_RELEASE := target/release/$(BINARY)
 
-.PHONY: all build release run run-release run-daemon run-daemon-release test check clippy fmt fmt-check ci e2e clean install install-systemd help
+.PHONY: all build release run run-release run-daemon run-daemon-release test check clippy fmt fmt-check ci e2e e2e-multiproc e2e-cgroup clean install install-systemd help
 
 all: build
 
@@ -45,6 +45,12 @@ ci: fmt-check clippy test
 e2e:
 	bash scripts/e2e-smoke.sh
 
+e2e-multiproc:
+	bash scripts/e2e-multiproc.sh
+
+e2e-cgroup:
+	bash scripts/e2e-cgroup.sh
+
 clean:
 	$(CARGO) clean
 
@@ -72,6 +78,8 @@ help:
 	@echo "  make test         Run tests"
 	@echo "  make ci           Run fmt-check, clippy, and test (matches CI check job)"
 	@echo "  make e2e          Run end-to-end throttle smoke test (needs stress-ng)"
+	@echo "  make e2e-multiproc  E2E multi-process app group throttling"
+	@echo "  make e2e-cgroup     E2E cgroup backend (root only; skips otherwise)"
 	@echo "  make check        Type-check without producing binaries"
 	@echo "  make clippy       Lint with clippy (-D warnings)"
 	@echo "  make fmt          Format source with rustfmt"

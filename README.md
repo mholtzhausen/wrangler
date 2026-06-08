@@ -126,6 +126,13 @@ CI runs on every push/PR to `main` via [`.github/workflows/ci.yml`](.github/work
 - **check** — `cargo fmt --check`, `clippy`, unit tests
 - **e2e** — headless daemon + `stress-ng` CPU hog; verifies throttling via `wrangler --status`
 
+Additional local e2e targets:
+
+```bash
+make e2e-multiproc   # forked stress-ng; verifies multi-PID app group throttling
+sudo make e2e-cgroup # cgroup v2 dirs + cpu.max (root only)
+```
+
 Query a running daemon:
 
 ```bash

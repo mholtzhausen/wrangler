@@ -46,3 +46,6 @@ jobs:
 
       - name: Run e2e smoke test
         run: bash scripts/e2e-smoke.sh
+
+      - name: Run multi-process e2e test
+        run: bash scripts/e2e-multiproc.sh

@@ -32,13 +32,14 @@ pub struct AppState {
     pub pressure_threshold: f32,
     pub global_cpu: f32,
     pub num_cores: usize,
+    pub throttle_backend: String,
     pub throttle_log: Vec<ThrottleLogEntry>,
     pub last_error: Option<String>,
     pub quitting: bool,
 }
 
 impl AppState {
-    pub fn new(app_cap: f32, pressure_threshold: f32) -> Self {
+    pub fn new(app_cap: f32, pressure_threshold: f32, throttle_backend: impl Into<String>) -> Self {
         Self {
             processes: Vec::new(),
             throttled_groups: Vec::new(),
@@ -47,6 +48,7 @@ impl AppState {
             pressure_threshold,
             global_cpu: 0.0,
             num_cores: 1,
+            throttle_backend: throttle_backend.into(),
             throttle_log: Vec::new(),
             last_error: None,
             quitting: false,
