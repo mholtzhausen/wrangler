@@ -1,0 +1,13 @@
+[Unit]
+Description=Wrangler process CPU throttle daemon
+Documentation=https://github.com/mholtzhausen/wrangler
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/wrangler --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

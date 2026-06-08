@@ -16,11 +16,17 @@ pub enum UiAction {
     Quit,
 }
 
+#[derive(Default)]
+pub struct UiConfig {
+    pub attached: bool,
+}
+
 pub async fn run_ui(
     mut state_rx: watch::Receiver<AppState>,
     action_tx: mpsc::Sender<UiAction>,
     mut terminal: Terminal<CrosstermBackend<Stdout>>,
     mut shutdown_rx: watch::Receiver<bool>,
+    config: UiConfig,
 ) -> io::Result<()> {
     let mut state = state_rx.borrow_and_update().clone();
 
@@ -29,7 +35,7 @@ pub async fn run_ui(
             break;
         }
 
-        terminal.draw(|f| draw_ui(f, &state))?;
+        terminal.draw(|f| draw_ui(f, &state, &config))?;
 
         tokio::select! {
             changed = state_rx.changed() => {
@@ -39,8 +45,8 @@ pub async fn run_ui(
             }
             _ = tokio::time::sleep(Duration::from_millis(50)) => {
                 if event::poll(Duration::from_millis(0))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press {
+                    match event::read()? {
+                        Event::Key(key) if key.kind == KeyEventKind::Press => {
                             match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => {
                                     let _ = action_tx.send(UiAction::Quit).await;
@@ -57,6 +63,7 @@ pub async fn run_ui(
                                 _ => {}
                             }
                         }
+                        _ => {}
                     }
                 }
             }
@@ -66,7 +73,7 @@ pub async fn run_ui(
     Ok(())
 }
 
-fn draw_ui(f: &mut ratatui::Frame, state: &AppState) {
+fn draw_ui(f: &mut ratatui::Frame, state: &AppState, config: &UiConfig) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -76,8 +83,14 @@ fn draw_ui(f: &mut ratatui::Frame, state: &AppState) {
         ])
         .split(f.area());
 
+    let mode_hint = if config.attached {
+        "attached to daemon"
+    } else {
+        "standalone"
+    };
+
     let header = Paragraph::new(format!(
-        "Active Limit Threshold: {:.1}% | [Up/Down] adjust | [q/Esc] quit",
+        "Active Limit Threshold: {:.1}% ({mode_hint}) | [Up/Down] adjust | [q/Esc] quit",
         state.cpu_threshold
     ))
     .block(

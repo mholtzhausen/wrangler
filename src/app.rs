@@ -1,19 +1,20 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub name: String,
     pub cpu_usage: f32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThrottleLogEntry {
     pub pid: u32,
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
     pub processes: Vec<ProcessInfo>,
     pub throttled_pids: HashSet<u32>,

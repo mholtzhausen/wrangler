@@ -15,10 +15,26 @@ pub struct Cli {
     /// Use cgroups v2 cpu.max instead of SIGSTOP/SIGCONT (requires root)
     #[arg(long)]
     pub cgroups: bool,
+
+    /// Run in background without TUI (monitor + throttle only)
+    #[arg(long)]
+    pub daemon: bool,
+
+    /// Disable system tray when running as a daemon
+    #[arg(long)]
+    pub no_tray: bool,
+
+    /// Attach TUI to a running daemon (used by the tray dashboard launcher)
+    #[arg(long)]
+    pub attach: bool,
 }
 
 impl Cli {
     pub fn interval_duration(&self) -> Duration {
         Duration::from_millis(self.interval)
+    }
+
+    pub fn tray_enabled(&self) -> bool {
+        self.daemon && !self.no_tray
     }
 }

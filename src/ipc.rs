@@ -1,0 +1,262 @@
+use crate::app::AppState;
+use crate::event::HubCommand;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
+
+const SOCKET_NAME: &str = "wrangler.sock";
+
+pub fn socket_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(dir).join(SOCKET_NAME);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("run")
+            .join(SOCKET_NAME);
+    }
+    PathBuf::from("/tmp").join(format!("wrangler-{}.sock", std::process::id()))
+}
+
+pub struct IpcServerGuard {
+    path: PathBuf,
+    _accept_task: JoinHandle<()>,
+}
+
+pub async fn spawn_server(
+    hub_tx: mpsc::Sender<HubCommand>,
+    state_rx: watch::Receiver<AppState>,
+) -> Result<IpcServerGuard, Box<dyn std::error::Error>> {
+    let path = socket_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let listener = UnixListener::bind(&path)?;
+    tracing::info!(path = %path.display(), "IPC server listening");
+
+    let accept_task = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    let hub_tx = hub_tx.clone();
+                    let state_rx = state_rx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_client(stream, hub_tx, state_rx).await {
+                            tracing::debug!(error = %e, "IPC client disconnected");
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "IPC accept failed");
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(IpcServerGuard {
+        path,
+        _accept_task: accept_task,
+    })
+}
+
+impl Drop for IpcServerGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+enum ClientRequest {
+    Ping,
+    Subscribe,
+    SetThreshold { value: f32 },
+    Detach,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ServerMessage {
+    Ok,
+    Error { message: String },
+    State { data: AppState },
+}
+
+async fn handle_client(
+    stream: UnixStream,
+    hub_tx: mpsc::Sender<HubCommand>,
+    state_rx: watch::Receiver<AppState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (read_half, mut write_half) = stream.into_split();
+    let (out_tx, mut out_rx) = mpsc::channel::<ServerMessage>(32);
+
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            let line = match serde_json::to_string(&msg) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if write_half.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+            if write_half.write_all(b"\n").await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut forward_task: Option<JoinHandle<()>> = None;
+    let mut lines = BufReader::new(read_half).lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let req: ClientRequest = serde_json::from_str(&line)?;
+        match req {
+            ClientRequest::Ping => {
+                let _ = send_message(&out_tx, ServerMessage::Ok).await;
+            }
+            ClientRequest::Subscribe => {
+                if forward_task.is_some() {
+                    continue;
+                }
+                let snapshot = state_rx.borrow().clone();
+                let _ = send_message(
+                    &out_tx,
+                    ServerMessage::State { data: snapshot },
+                )
+                .await;
+
+                let mut rx = state_rx.clone();
+                let tx = out_tx.clone();
+                forward_task = Some(tokio::spawn(async move {
+                    loop {
+                        if rx.changed().await.is_err() {
+                            break;
+                        }
+                        let state = rx.borrow().clone();
+                        if send_message(&tx, ServerMessage::State { data: state })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }));
+            }
+            ClientRequest::SetThreshold { value } => {
+                let _ = hub_tx
+                    .send(HubCommand::SetThreshold(value.clamp(1.0, 100.0)))
+                    .await;
+                let _ = send_message(&out_tx, ServerMessage::Ok).await;
+            }
+            ClientRequest::Detach => break,
+        }
+    }
+
+    if let Some(task) = forward_task {
+        task.abort();
+    }
+    writer.abort();
+    Ok(())
+}
+
+async fn send_message(
+    tx: &mpsc::Sender<ServerMessage>,
+    msg: ServerMessage,
+) -> Result<(), ()> {
+    tx.send(msg).await.map_err(|_| ())
+}
+
+pub struct AttachSession {
+    request_tx: mpsc::Sender<ClientRequest>,
+    state_tx: watch::Sender<AppState>,
+    _reader_task: JoinHandle<()>,
+    _writer_task: JoinHandle<()>,
+}
+
+impl AttachSession {
+    pub async fn connect() -> Result<Self, Box<dyn std::error::Error>> {
+        let stream = UnixStream::connect(socket_path()).await?;
+        let (read_half, mut write_half) = stream.into_split();
+        let (request_tx, mut request_rx) = mpsc::channel::<ClientRequest>(16);
+        let (state_tx, _state_rx) = watch::channel(AppState::new(80.0));
+        let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
+
+        let writer_task = tokio::spawn(async move {
+            while let Some(req) = request_rx.recv().await {
+                let line = match serde_json::to_string(&req) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                if write_half.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+                if write_half.write_all(b"\n").await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        request_tx.send(ClientRequest::Subscribe).await?;
+
+        let reader_state_tx = state_tx.clone();
+        let reader_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(read_half).lines();
+            let mut initial_tx = Some(initial_tx);
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                let msg: ServerMessage = match serde_json::from_str(&line) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                match msg {
+                    ServerMessage::State { data } => {
+                        let _ = reader_state_tx.send(data);
+                        if let Some(tx) = initial_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    ServerMessage::Ok => {}
+                    ServerMessage::Error { message } => {
+                        tracing::warn!(error = %message, "daemon IPC error");
+                    }
+                }
+            }
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), initial_rx)
+            .await
+            .map_err(|_| "timed out waiting for daemon state")??;
+
+        Ok(Self {
+            request_tx,
+            state_tx,
+            _reader_task: reader_task,
+            _writer_task: writer_task,
+        })
+    }
+
+    pub fn state_rx(&self) -> watch::Receiver<AppState> {
+        self.state_tx.subscribe()
+    }
+
+    pub async fn set_threshold(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
+        self.request_tx
+            .send(ClientRequest::SetThreshold { value })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn detach(self) -> Result<(), Box<dyn std::error::Error>> {
+        let _ = self.request_tx.send(ClientRequest::Detach).await;
+        Ok(())
+    }
+}
