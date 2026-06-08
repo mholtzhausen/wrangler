@@ -1,7 +1,8 @@
-use crate::app::ProcessInfo;
+use crate::app::{AppGroupInfo, ProcessInfo};
 use crate::event::HubCommand;
 use crate::policy::{
-    build_groups, evaluate, group_by_key, PolicySettings, RawProcess, ThrottleDecision,
+    build_groups, effective_protected_apps, evaluate, group_by_key, GroupingMode,
+    PolicySettings, RawProcess, ThrottleDecision,
 };
 use std::collections::HashSet;
 use std::time::Duration;
@@ -14,6 +15,8 @@ pub struct MonitorConfig {
     pub interval: Duration,
     pub self_pid: u32,
     pub protected_pids: HashSet<u32>,
+    pub protected_apps: Vec<String>,
+    pub grouping: GroupingMode,
     pub policy: PolicySettings,
 }
 
@@ -29,6 +32,7 @@ pub async fn run_monitor(
     );
 
     let mut throttled_groups: HashSet<u32> = HashSet::new();
+    let protected_apps = effective_protected_apps(&config.protected_apps);
 
     loop {
         sys.refresh_cpu();
@@ -73,7 +77,12 @@ pub async fn run_monitor(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let groups = build_groups(&raw, &config.protected_pids);
+        let groups = build_groups(
+            &raw,
+            &config.protected_pids,
+            &protected_apps,
+            policy.grouping,
+        );
         let decision = evaluate(
             &groups,
             global_cpu,
@@ -120,9 +129,11 @@ pub async fn run_monitor(
             throttled_groups.remove(&key);
         }
 
+        let group_infos: Vec<AppGroupInfo> = groups.iter().map(AppGroupInfo::from).collect();
         let _ = hub_tx
             .send(HubCommand::ProcessSnapshot {
                 processes,
+                groups: group_infos,
                 global_cpu,
                 num_cores,
             })

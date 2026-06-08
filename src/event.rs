@@ -1,4 +1,5 @@
-use crate::app::{AppState, ProcessInfo, ThrottledGroupInfo};
+use crate::app::{AppGroupInfo, AppState, ProcessInfo, ThrottledGroupInfo};
+use crate::policy::GroupingMode;
 use crate::policy::machine_cpu_budget;
 use crate::throttle::{run_signal_governor, ThrottleBackend};
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 pub enum HubCommand {
     ProcessSnapshot {
         processes: Vec<ProcessInfo>,
+        groups: Vec<AppGroupInfo>,
         global_cpu: f32,
         num_cores: usize,
     },
@@ -58,6 +60,8 @@ struct ActiveGroupThrottle {
 pub fn spawn_event_hub(
     initial_app_cap: f32,
     initial_pressure_threshold: f32,
+    grouping: GroupingMode,
+    protected_apps: Vec<String>,
     backend: ThrottleBackend,
 ) -> HubHandles {
     let (command_tx, mut command_rx) = mpsc::channel::<HubCommand>(256);
@@ -67,6 +71,8 @@ pub fn spawn_event_hub(
         initial_app_cap,
         initial_pressure_threshold,
         backend_label.clone(),
+        grouping.as_str(),
+        protected_apps.clone(),
     ));
     let (shutdown_tx, _) = watch::channel(false);
     let shutdown_notify = shutdown_tx.clone();
@@ -79,6 +85,8 @@ pub fn spawn_event_hub(
             initial_app_cap,
             initial_pressure_threshold,
             backend_label,
+            grouping.as_str(),
+            protected_apps,
         );
         let mut active: HashMap<u32, ActiveGroupThrottle> = HashMap::new();
 
@@ -124,10 +132,12 @@ async fn handle_command(
     match cmd {
         HubCommand::ProcessSnapshot {
             processes,
+            groups,
             global_cpu,
             num_cores,
         } => {
             state.processes = processes;
+            state.groups = groups;
             state.global_cpu = global_cpu;
             state.num_cores = num_cores;
             broadcast(state_tx, state);

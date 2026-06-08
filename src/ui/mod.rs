@@ -1,4 +1,4 @@
-use crate::app::AppState;
+use crate::app::{AppGroupInfo, AppState, ProcessInfo};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     backend::CrosstermBackend,
@@ -10,6 +10,7 @@ use ratatui::{
     },
     Terminal,
 };
+use std::collections::HashSet;
 use std::io::{self, Stdout};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -24,6 +25,25 @@ pub struct UiConfig {
     pub attached: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    Flat,
+    Grouped,
+}
+
+enum DisplayRow<'a> {
+    GroupHeader {
+        group: &'a AppGroupInfo,
+        expanded: bool,
+        throttled: bool,
+    },
+    Process {
+        process: &'a ProcessInfo,
+        indented: bool,
+        throttled: bool,
+    },
+}
+
 pub async fn run_ui(
     mut state_rx: watch::Receiver<AppState>,
     action_tx: mpsc::Sender<UiAction>,
@@ -33,6 +53,8 @@ pub async fn run_ui(
 ) -> io::Result<()> {
     let mut state = state_rx.borrow_and_update().clone();
     let mut table_state = TableState::default();
+    let mut view_mode = ViewMode::Flat;
+    let mut expanded_groups = HashSet::new();
 
     loop {
         if *shutdown_rx.borrow_and_update() || state.quitting {
@@ -46,7 +68,7 @@ pub async fn run_ui(
             let size = terminal.size()?;
             clamp_table_offset(
                 &mut table_state,
-                state.processes.len(),
+                display_row_count(&state, view_mode, &expanded_groups),
                 table_viewport_rows(Rect::new(0, 0, size.width, size.height)),
             );
             dirty = true;
@@ -58,6 +80,8 @@ pub async fn run_ui(
                 code,
                 &state,
                 &mut table_state,
+                &mut view_mode,
+                &mut expanded_groups,
                 &action_tx,
                 viewport,
             )
@@ -65,15 +89,33 @@ pub async fn run_ui(
             {
                 return Ok(());
             }
-            if is_scroll_key(code) {
-                terminal.draw(|f| draw_ui(f, &state, &config, &mut table_state))?;
+            if is_scroll_key(code) || is_view_key(code) {
+                terminal.draw(|f| {
+                    draw_ui(
+                        f,
+                        &state,
+                        &config,
+                        &mut table_state,
+                        view_mode,
+                        &expanded_groups,
+                    )
+                })?;
             } else {
                 dirty = true;
             }
         }
 
         if dirty {
-            terminal.draw(|f| draw_ui(f, &state, &config, &mut table_state))?;
+            terminal.draw(|f| {
+                draw_ui(
+                    f,
+                    &state,
+                    &config,
+                    &mut table_state,
+                    view_mode,
+                    &expanded_groups,
+                )
+            })?;
             continue;
         }
 
@@ -84,10 +126,17 @@ pub async fn run_ui(
                     let size = terminal.size()?;
                     clamp_table_offset(
                         &mut table_state,
-                        state.processes.len(),
+                        display_row_count(&state, view_mode, &expanded_groups),
                         table_viewport_rows(Rect::new(0, 0, size.width, size.height)),
                     );
-                    terminal.draw(|f| draw_ui(f, &state, &config, &mut table_state))?;
+                    terminal.draw(|f| draw_ui(
+                        f,
+                        &state,
+                        &config,
+                        &mut table_state,
+                        view_mode,
+                        &expanded_groups,
+                    ))?;
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(16)) => {}
@@ -123,10 +172,16 @@ fn is_scroll_key(code: KeyCode) -> bool {
     )
 }
 
+fn is_view_key(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('g') | KeyCode::Char('o') | KeyCode::Enter)
+}
+
 async fn handle_key(
     code: KeyCode,
     state: &AppState,
     table_state: &mut TableState,
+    view_mode: &mut ViewMode,
+    expanded_groups: &mut HashSet<u32>,
     action_tx: &mpsc::Sender<UiAction>,
     viewport: usize,
 ) -> io::Result<bool> {
@@ -134,6 +189,18 @@ async fn handle_key(
         KeyCode::Char('q') | KeyCode::Esc => {
             let _ = action_tx.send(UiAction::Quit).await;
             Ok(true)
+        }
+        KeyCode::Char('g') => {
+            *view_mode = match *view_mode {
+                ViewMode::Flat => ViewMode::Grouped,
+                ViewMode::Grouped => ViewMode::Flat,
+            };
+            *table_state.offset_mut() = 0;
+            Ok(false)
+        }
+        KeyCode::Char('o') | KeyCode::Enter if *view_mode == ViewMode::Grouped => {
+            toggle_expand_at_offset(state, expanded_groups, table_state.offset());
+            Ok(false)
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
             let new = (state.app_cap + 5.0).min(100.0);
@@ -148,7 +215,7 @@ async fn handle_key(
         KeyCode::Down | KeyCode::Char('j') | KeyCode::PageDown => {
             scroll_table_down(
                 table_state,
-                state.processes.len(),
+                display_row_count(state, *view_mode, expanded_groups),
                 viewport,
                 if matches!(code, KeyCode::PageDown) {
                     viewport
@@ -173,9 +240,116 @@ async fn handle_key(
     }
 }
 
+fn toggle_expand_at_offset(
+    state: &AppState,
+    expanded_groups: &mut HashSet<u32>,
+    offset: usize,
+) {
+    let rows = build_display_rows(state, ViewMode::Grouped, expanded_groups);
+    if let Some(DisplayRow::GroupHeader { group, .. }) = rows.get(offset) {
+        let key = group.group_key;
+        if expanded_groups.contains(&key) {
+            expanded_groups.remove(&key);
+        } else {
+            expanded_groups.insert(key);
+        }
+    }
+}
+
+fn display_row_count(state: &AppState, view_mode: ViewMode, expanded: &HashSet<u32>) -> usize {
+    build_display_rows(state, view_mode, expanded).len()
+}
+
+fn build_display_rows<'a>(
+    state: &'a AppState,
+    view_mode: ViewMode,
+    expanded: &HashSet<u32>,
+) -> Vec<DisplayRow<'a>> {
+    match view_mode {
+        ViewMode::Flat => state
+            .processes
+            .iter()
+            .map(|process| DisplayRow::Process {
+                process,
+                indented: false,
+                throttled: state.throttled_pids.contains(&process.pid),
+            })
+            .collect(),
+        ViewMode::Grouped => {
+            let mut rows = Vec::new();
+            for group in &state.groups {
+                let throttled = state.is_group_throttled(group.group_key);
+                let is_expanded = expanded.contains(&group.group_key);
+                rows.push(DisplayRow::GroupHeader {
+                    group,
+                    expanded: is_expanded,
+                    throttled,
+                });
+                if is_expanded {
+                    for pid in &group.pids {
+                        if let Some(process) = state.processes.iter().find(|p| p.pid == *pid) {
+                            rows.push(DisplayRow::Process {
+                                process,
+                                indented: true,
+                                throttled: state.throttled_pids.contains(&process.pid),
+                            });
+                        }
+                    }
+                }
+            }
+            rows
+        }
+    }
+}
+
+fn row_to_cells<'a>(row: &'a DisplayRow<'a>) -> Row<'a> {
+    match row {
+        DisplayRow::GroupHeader {
+            group,
+            expanded,
+            throttled,
+        } => {
+            let marker = if *throttled { "●" } else { " " };
+            let arrow = if *expanded { "▼" } else { "▶" };
+            let mut style = Style::default().add_modifier(Modifier::BOLD);
+            if *throttled {
+                style = style.fg(Color::Red);
+            } else {
+                style = style.fg(Color::Cyan);
+            }
+            Row::new(vec![
+                Cell::from(format!("{marker}{arrow} {}", group.group_key)),
+                Cell::from(format!(
+                    "{} ({} pids)",
+                    group.name,
+                    group.pids.len()
+                )),
+                Cell::from(format!("{:.1}%", group.cpu_total)),
+            ])
+            .style(style)
+        }
+        DisplayRow::Process {
+            process,
+            indented,
+            throttled,
+        } => {
+            let mut style = Style::default();
+            if *throttled {
+                style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
+            }
+            let prefix = if *indented { "  └ " } else { "" };
+            Row::new(vec![
+                Cell::from(format!("{prefix}{}", process.pid)),
+                Cell::from(process.name.as_str()),
+                Cell::from(format!("{:.1}%", process.cpu_usage)),
+            ])
+            .style(style)
+        }
+    }
+}
+
 /// Middle pane height minus block borders and header row.
 fn table_viewport_rows(area: Rect) -> usize {
-    // header(3) + footer(5) + middle borders/header row
     let middle = area.height.saturating_sub(3 + 5);
     middle.saturating_sub(3).max(1) as usize
 }
@@ -197,7 +371,6 @@ fn scroll_table_up(state: &mut TableState, amount: usize) {
     *state.offset_mut() = state.offset().saturating_sub(amount);
 }
 
-/// Right-edge track aligned with scrollable data rows (below block border + column header).
 fn table_scrollbar_area(table_area: Rect) -> Rect {
     Rect {
         x: table_area.x.saturating_add(table_area.width.saturating_sub(1)),
@@ -212,6 +385,8 @@ fn draw_ui(
     state: &AppState,
     config: &UiConfig,
     table_state: &mut TableState,
+    view_mode: ViewMode,
+    expanded_groups: &HashSet<u32>,
 ) {
     let area = f.area();
 
@@ -225,22 +400,30 @@ fn draw_ui(
         .split(area);
 
     let viewport = chunks[1].height.saturating_sub(3).max(1) as usize;
-    clamp_table_offset(table_state, state.processes.len(), viewport);
+    let display_rows = build_display_rows(state, view_mode, expanded_groups);
+    let row_count = display_rows.len();
+    clamp_table_offset(table_state, row_count, viewport);
 
     let mode_hint = if config.attached {
         "attached to daemon"
     } else {
         "standalone"
     };
+    let view_label = match view_mode {
+        ViewMode::Flat => "flat",
+        ViewMode::Grouped => "grouped",
+    };
 
     let machine_budget = crate::policy::machine_cpu_budget(state.app_cap, state.num_cores);
     let header = Paragraph::new(format!(
-        "System: {:.0}% | App cap: {:.0}% ({:.0}%/{} cores) | {} ({mode_hint}) | [+/-] cap | [Up/Down] scroll | [q/Esc] quit",
+        "System: {:.0}% | Cap: {:.0}% ({:.0}%/{} cores) | {} | {}:{} ({mode_hint}) | [g] view [o] expand [+/-] cap",
         state.global_cpu,
         state.app_cap,
         machine_budget,
         state.num_cores,
         state.throttle_backend,
+        view_label,
+        state.grouping,
     ))
     .block(
         Block::default()
@@ -249,48 +432,32 @@ fn draw_ui(
     );
     f.render_widget(header, chunks[0]);
 
-    let total = state.processes.len();
     let offset = table_state.offset();
-    let visible_end = (offset + viewport).min(total);
-    let table_title = if total == 0 {
-        " System Resource Processes Monitor ".to_string()
-    } else if total <= viewport {
-        format!(" System Resource Processes Monitor ({total}) ")
+    let visible_end = (offset + viewport).min(row_count);
+    let table_title = if row_count == 0 {
+        format!(" Processes ({view_label}) ")
+    } else if row_count <= viewport {
+        format!(" Processes ({view_label}, {row_count}) ")
     } else {
         format!(
-            " System Resource Processes Monitor ({}–{} of {total}) ",
+            " Processes ({view_label}, {}–{} of {row_count}) ",
             offset + 1,
             visible_end
         )
     };
 
-    let rows: Vec<Row> = state
-        .processes
-        .iter()
-        .map(|p| {
-            let mut style = Style::default();
-            if state.throttled_pids.contains(&p.pid) {
-                style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
-            }
-            Row::new(vec![
-                Cell::from(p.pid.to_string()),
-                Cell::from(p.name.as_str()),
-                Cell::from(format!("{:.1}%", p.cpu_usage)),
-            ])
-            .style(style)
-        })
-        .collect();
+    let rows: Vec<Row> = display_rows.iter().map(row_to_cells).collect();
 
     let header_row = Row::new(vec![
-        Cell::from("PID").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("Process").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("PID/Key").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Process / Group").style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from("CPU").style(Style::default().add_modifier(Modifier::BOLD)),
     ]);
 
     let table = Table::new(
         rows,
         [
-            Constraint::Length(10),
+            Constraint::Length(12),
             Constraint::Min(16),
             Constraint::Length(8),
         ],
@@ -305,7 +472,7 @@ fn draw_ui(
 
     f.render_stateful_widget(table, chunks[1], table_state);
 
-    if total > viewport {
+    if row_count > viewport {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"))
@@ -314,7 +481,7 @@ fn draw_ui(
             .thumb_style(Style::default().fg(Color::Cyan))
             .track_style(Style::default().fg(Color::DarkGray));
 
-        let mut scrollbar_state = ScrollbarState::new(total)
+        let mut scrollbar_state = ScrollbarState::new(row_count)
             .position(offset)
             .viewport_content_length(viewport);
 
@@ -339,9 +506,10 @@ fn draw_ui(
         .collect();
 
     let mut footer_text = format!(
-        "Pressure >= {:.0}% | Throttled groups: [{}]",
+        "Pressure >= {:.0}% | Throttled: [{}] | Protected: {}",
         state.pressure_threshold,
-        throttled_groups.join(", ")
+        throttled_groups.join(", "),
+        state.protected_apps.len(),
     );
     if let Some(err) = &state.last_error {
         footer_text.push_str(&format!(" | Error: {err}"));

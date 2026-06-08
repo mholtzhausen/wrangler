@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::daemon::is_detached_child;
+use crate::policy::GroupingMode;
 use crate::runtime::RuntimeSettings;
 
 #[derive(Debug, Parser)]
@@ -20,6 +21,10 @@ pub struct Cli {
     /// Monitor polling interval in milliseconds
     #[arg(long)]
     pub interval: Option<u64>,
+
+    /// Process grouping strategy: tree (default) or name
+    #[arg(long, value_parser = parse_grouping)]
+    pub grouping: Option<GroupingMode>,
 
     /// Request cgroups v2 cpu.max (only effective when running as root)
     #[arg(long)]
@@ -62,6 +67,8 @@ impl Cli {
                 .map(crate::config::clamp_pressure_threshold)
                 .unwrap_or(file.pressure_threshold),
             top_offenders: file.top_offenders,
+            grouping: self.grouping.unwrap_or(file.grouping),
+            protected_apps: file.protected_apps.clone(),
             interval: Duration::from_millis(self.interval.unwrap_or(file.interval_ms)),
             cgroups: self.cgroups || file.use_cgroups,
         }
@@ -84,6 +91,14 @@ impl Cli {
     }
 }
 
+fn parse_grouping(value: &str) -> Result<GroupingMode, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "tree" => Ok(GroupingMode::Tree),
+        "name" => Ok(GroupingMode::Name),
+        other => Err(format!("invalid grouping '{other}' (expected tree or name)")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +109,8 @@ mod tests {
             app_cap: 60.0,
             pressure_threshold: 85.0,
             top_offenders: 1,
+            grouping: GroupingMode::Tree,
+            protected_apps: Vec::new(),
             interval_ms: 2000,
             use_cgroups: false,
         };
@@ -101,6 +118,7 @@ mod tests {
             app_cap: Some(45.0),
             pressure_threshold: None,
             interval: Some(750),
+            grouping: None,
             cgroups: false,
             daemon: false,
             foreground: false,
@@ -119,6 +137,8 @@ mod tests {
             app_cap: 60.0,
             pressure_threshold: 85.0,
             top_offenders: 1,
+            grouping: GroupingMode::Tree,
+            protected_apps: Vec::new(),
             interval_ms: 2000,
             use_cgroups: false,
         };
@@ -126,6 +146,7 @@ mod tests {
             app_cap: None,
             pressure_threshold: None,
             interval: None,
+            grouping: None,
             cgroups: false,
             daemon: false,
             foreground: false,
@@ -156,5 +177,11 @@ mod tests {
     fn threshold_alias_maps_to_app_cap() {
         let cli = Cli::try_parse_from(["wrangler", "--threshold", "55"]).unwrap();
         assert_eq!(cli.app_cap, Some(55.0));
+    }
+
+    #[test]
+    fn grouping_flag_parses_name_mode() {
+        let cli = Cli::try_parse_from(["wrangler", "--grouping", "name"]).unwrap();
+        assert_eq!(cli.grouping, Some(GroupingMode::Name));
     }
 }

@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
+use crate::policy::GroupingMode;
 use crate::runtime::RuntimeSettings;
 
 pub const DEFAULT_APP_CAP: f32 = 40.0;
@@ -18,6 +19,10 @@ pub struct Config {
     pub pressure_threshold: f32,
     #[serde(default = "default_top_offenders")]
     pub top_offenders: usize,
+    #[serde(default)]
+    pub grouping: GroupingMode,
+    #[serde(default)]
+    pub protected_apps: Vec<String>,
     #[serde(default = "default_interval_ms")]
     pub interval_ms: u64,
     #[serde(default)]
@@ -30,6 +35,8 @@ impl Default for Config {
             app_cap: DEFAULT_APP_CAP,
             pressure_threshold: DEFAULT_PRESSURE_THRESHOLD,
             top_offenders: DEFAULT_TOP_OFFENDERS,
+            grouping: GroupingMode::default(),
+            protected_apps: Vec::new(),
             interval_ms: DEFAULT_INTERVAL_MS,
             use_cgroups: false,
         }
@@ -78,7 +85,9 @@ pub fn config_path() -> PathBuf {
 
 impl Config {
     pub fn load() -> Self {
-        Self::load_from(&config_path())
+        let path = config_path();
+        let _ = migrate_legacy_config(&path);
+        Self::load_from(&path)
     }
 
     pub fn load_from(path: &std::path::Path) -> Self {
@@ -109,6 +118,8 @@ impl Config {
             app_cap: settings.app_cap,
             pressure_threshold: settings.pressure_threshold,
             top_offenders: settings.top_offenders,
+            grouping: settings.grouping,
+            protected_apps: settings.protected_apps.clone(),
             interval_ms: settings.interval.as_millis() as u64,
             use_cgroups: settings.cgroups,
         }
@@ -124,6 +135,28 @@ impl Config {
         config.app_cap = clamp_app_cap(app_cap);
         config.save_to(path)
     }
+}
+
+/// Rewrite legacy configs that still use `threshold` to the current schema.
+pub fn migrate_legacy_config(path: &std::path::Path) -> io::Result<bool> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Ok(false);
+    };
+
+    let uses_legacy = contents.contains("threshold") && !contents.contains("app_cap");
+    if !uses_legacy {
+        return Ok(false);
+    }
+
+    let config: Config = toml::from_str(&contents).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to migrate legacy config: {e}"),
+        )
+    })?;
+    config.save_to(path)?;
+    tracing::info!(path = %path.display(), "migrated config from threshold to app_cap schema");
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -156,6 +189,8 @@ mod tests {
             app_cap: 55.0,
             pressure_threshold: 80.0,
             top_offenders: 2,
+            grouping: GroupingMode::Name,
+            protected_apps: vec!["firefox".into()],
             interval_ms: 500,
             use_cgroups: true,
         };
@@ -184,6 +219,22 @@ mod tests {
     fn legacy_threshold_key_loads_as_app_cap() {
         let path = temp_config_path();
         fs::write(&path, "threshold = 33.0\n").unwrap();
+        assert_eq!(Config::load_from(&path).app_cap, 33.0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn migrate_legacy_config_rewrites_file() {
+        let path = temp_config_path();
+        fs::write(&path, "threshold = 33.0\ninterval_ms = 750\n").unwrap();
+        assert!(migrate_legacy_config(&path).unwrap());
+        let migrated = fs::read_to_string(&path).unwrap();
+        assert!(migrated.contains("app_cap"));
+        assert!(
+            !migrated
+                .lines()
+                .any(|line| line.trim_start().starts_with("threshold"))
+        );
         assert_eq!(Config::load_from(&path).app_cap, 33.0);
         let _ = fs::remove_file(path);
     }

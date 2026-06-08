@@ -93,7 +93,7 @@ pub enum ClientRequest {
 pub enum ServerMessage {
     Ok,
     Error { message: String },
-    State { data: AppState },
+    State { data: Box<AppState> },
 }
 
 pub async fn daemon_running() -> bool {
@@ -158,7 +158,13 @@ async fn handle_client(
                     continue;
                 }
                 let snapshot = state_rx.borrow().clone();
-                let _ = send_message(&out_tx, ServerMessage::State { data: snapshot }).await;
+                let _ = send_message(
+                    &out_tx,
+                    ServerMessage::State {
+                        data: Box::new(snapshot),
+                    },
+                )
+                .await;
 
                 let mut rx = state_rx.clone();
                 let tx = out_tx.clone();
@@ -168,7 +174,12 @@ async fn handle_client(
                             break;
                         }
                         let state = rx.borrow().clone();
-                        if send_message(&tx, ServerMessage::State { data: state })
+                        if send_message(
+                            &tx,
+                            ServerMessage::State {
+                                data: Box::new(state),
+                            },
+                        )
                             .await
                             .is_err()
                         {
@@ -213,6 +224,8 @@ impl AttachSession {
             80.0,
             crate::config::DEFAULT_PRESSURE_THRESHOLD,
             "signal",
+            "tree",
+            Vec::new(),
         ));
         let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
 
@@ -245,7 +258,7 @@ impl AttachSession {
                 };
                 match msg {
                     ServerMessage::State { data } => {
-                        let _ = reader_state_tx.send(data);
+                        let _ = reader_state_tx.send(*data);
                         if let Some(tx) = initial_tx.take() {
                             let _ = tx.send(());
                         }
@@ -327,7 +340,13 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("WRANGLER_RUNTIME_DIR", &dir);
 
-        let hub = spawn_event_hub(70.0, 85.0, ThrottleBackend::Signal);
+        let hub = spawn_event_hub(
+            70.0,
+            85.0,
+            crate::policy::GroupingMode::Tree,
+            Vec::new(),
+            ThrottleBackend::Signal,
+        );
         let _server = spawn_server(hub.command_tx.clone(), hub.state_rx.clone())
             .await
             .unwrap();

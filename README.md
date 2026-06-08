@@ -37,7 +37,7 @@ cargo run
 make run
 ```
 
-Keys: **+/-** adjust app cap, **Up/Down** scroll, **q/Esc** quit.
+Keys: **g** flat/grouped view, **o** expand group, **+/-** app cap, **Up/Down** scroll, **q/Esc** quit.
 
 ### Background daemon + tray
 
@@ -77,11 +77,15 @@ Settings are stored at `~/.config/wrangler/config.toml`:
 app_cap = 40.0              # max % of machine CPU per app group
 pressure_threshold = 85.0   # global CPU % before throttling may engage (0 = always)
 top_offenders = 1           # how many hottest groups to consider
+grouping = "tree"           # tree (process tree root) or name (executable name)
+protected_apps = []         # extra never-throttle app names (builtins always protected)
 interval_ms = 1000
 use_cgroups = false
 ```
 
-The legacy `threshold` key is still accepted on load and maps to `app_cap`.
+The legacy `threshold` key is still accepted on load and maps to `app_cap`. On first load, legacy configs are rewritten to the current schema automatically.
+
+**Dashboard keys:** `g` toggle flat/grouped view, `o`/`Enter` expand/collapse a group, `+/-` app cap, `Up/Down` scroll.
 
 CLI flags override the file for that invocation. App cap changes from the dashboard are saved automatically.
 
@@ -100,6 +104,7 @@ Unit file: `contrib/systemd/user/wrangler.service`
 |------|-------------|
 | `--app-cap`, `--threshold` | Max % of machine CPU per app group (default: 40) |
 | `--pressure-threshold` | Global CPU % before throttling may engage (default: 85) |
+| `--grouping` | App grouping: `tree` (default) or `name` |
 | `--interval` | Poll interval in ms (default: from config or 1000) |
 | `--cgroups` | Request cgroups v2 (effective when running as root) |
 | `--daemon`, `--tray` | Run monitor/throttle in background (detaches from terminal) |

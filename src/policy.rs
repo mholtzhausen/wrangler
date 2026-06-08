@@ -1,10 +1,45 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+pub const BUILTIN_PROTECTED_APPS: &[&str] = &[
+    "wrangler",
+    "sshd",
+    "systemd",
+    "init",
+    "pipewire",
+    "wireplumber",
+    "Xorg",
+    "Xwayland",
+    "gnome-shell",
+    "kwin_wayland",
+    "sway",
+    "mutter",
+    "waybar",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupingMode {
+    #[default]
+    Tree,
+    Name,
+}
+
+impl GroupingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GroupingMode::Tree => "tree",
+            GroupingMode::Name => "name",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicySettings {
     pub app_cap: f32,
     pub pressure_threshold: f32,
     pub top_offenders: usize,
+    pub grouping: GroupingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +63,25 @@ pub struct ThrottleDecision {
     pub to_start: Vec<u32>,
     pub to_stop: Vec<u32>,
     pub to_sync: Vec<u32>,
+}
+
+pub fn effective_protected_apps(configured: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = BUILTIN_PROTECTED_APPS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for app in configured {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(app)) {
+            names.push(app.clone());
+        }
+    }
+    names
+}
+
+pub fn is_protected_name(name: &str, protected_apps: &[String]) -> bool {
+    protected_apps
+        .iter()
+        .any(|app| app.eq_ignore_ascii_case(name))
 }
 
 /// Machine-wide CPU budget in htop units (100% = one core).
@@ -64,7 +118,31 @@ pub fn resolve_tree_root(
     }
 }
 
-pub fn build_groups(processes: &[RawProcess], protected: &HashSet<u32>) -> Vec<AppGroup> {
+pub fn stable_name_key(name: &str) -> u32 {
+    let mut hash: u32 = 5381;
+    for byte in name.to_ascii_lowercase().bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u32::from(byte));
+    }
+    hash
+}
+
+pub fn build_groups(
+    processes: &[RawProcess],
+    protected_pids: &HashSet<u32>,
+    protected_apps: &[String],
+    mode: GroupingMode,
+) -> Vec<AppGroup> {
+    match mode {
+        GroupingMode::Tree => build_groups_by_tree(processes, protected_pids, protected_apps),
+        GroupingMode::Name => build_groups_by_name(processes, protected_pids, protected_apps),
+    }
+}
+
+fn build_groups_by_tree(
+    processes: &[RawProcess],
+    protected_pids: &HashSet<u32>,
+    protected_apps: &[String],
+) -> Vec<AppGroup> {
     let parent_map: HashMap<u32, Option<u32>> = processes
         .iter()
         .map(|p| (p.pid, p.parent_pid))
@@ -73,11 +151,12 @@ pub fn build_groups(processes: &[RawProcess], protected: &HashSet<u32>) -> Vec<A
     let mut grouped: HashMap<u32, AppGroup> = HashMap::new();
 
     for process in processes {
-        if protected.contains(&process.pid) {
+        if protected_pids.contains(&process.pid) || is_protected_name(&process.name, protected_apps)
+        {
             continue;
         }
 
-        let key = resolve_tree_root(process.pid, &parent_map, protected);
+        let key = resolve_tree_root(process.pid, &parent_map, protected_pids);
         let entry = grouped.entry(key).or_insert_with(|| AppGroup {
             key,
             name: process.name.clone(),
@@ -91,6 +170,37 @@ pub fn build_groups(processes: &[RawProcess], protected: &HashSet<u32>) -> Vec<A
         entry.cpu_total += process.cpu_usage;
     }
 
+    finalize_groups(grouped)
+}
+
+fn build_groups_by_name(
+    processes: &[RawProcess],
+    protected_pids: &HashSet<u32>,
+    protected_apps: &[String],
+) -> Vec<AppGroup> {
+    let mut grouped: HashMap<u32, AppGroup> = HashMap::new();
+
+    for process in processes {
+        if protected_pids.contains(&process.pid) || is_protected_name(&process.name, protected_apps)
+        {
+            continue;
+        }
+
+        let key = stable_name_key(&process.name);
+        let entry = grouped.entry(key).or_insert_with(|| AppGroup {
+            key,
+            name: process.name.clone(),
+            pids: Vec::new(),
+            cpu_total: 0.0,
+        });
+        entry.pids.push(process.pid);
+        entry.cpu_total += process.cpu_usage;
+    }
+
+    finalize_groups(grouped)
+}
+
+fn finalize_groups(grouped: HashMap<u32, AppGroup>) -> Vec<AppGroup> {
     let mut groups: Vec<AppGroup> = grouped.into_values().collect();
     for group in &mut groups {
         group.pids.sort_unstable();
@@ -175,6 +285,7 @@ mod tests {
             app_cap: 40.0,
             pressure_threshold: 85.0,
             top_offenders: 1,
+            grouping: GroupingMode::Tree,
         };
         let groups = vec![AppGroup {
             key: 10,
@@ -197,11 +308,51 @@ mod tests {
             proc(101, Some(100), "chrome", 80.0),
             proc(102, Some(100), "chrome", 70.0),
         ];
-        let groups = build_groups(&processes, &HashSet::new());
+        let groups = build_groups(
+            &processes,
+            &HashSet::new(),
+            &[],
+            GroupingMode::Tree,
+        );
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].key, 100);
         assert_eq!(groups[0].cpu_total, 200.0);
         assert_eq!(groups[0].pids, vec![100, 101, 102]);
+    }
+
+    #[test]
+    fn name_grouping_merges_same_executable() {
+        let processes = vec![
+            proc(100, Some(1), "node", 40.0),
+            proc(200, Some(1), "node", 60.0),
+        ];
+        let groups = build_groups(
+            &processes,
+            &HashSet::new(),
+            &[],
+            GroupingMode::Name,
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "node");
+        assert_eq!(groups[0].cpu_total, 100.0);
+        assert_eq!(groups[0].pids, vec![100, 200]);
+    }
+
+    #[test]
+    fn protected_apps_are_excluded_from_groups() {
+        let processes = vec![
+            proc(100, Some(1), "sshd", 90.0),
+            proc(200, Some(1), "hog", 90.0),
+        ];
+        let protected = effective_protected_apps(&[]);
+        let groups = build_groups(
+            &processes,
+            &HashSet::new(),
+            &protected,
+            GroupingMode::Name,
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "hog");
     }
 
     #[test]
@@ -210,6 +361,7 @@ mod tests {
             app_cap: 40.0,
             pressure_threshold: 85.0,
             top_offenders: 1,
+            grouping: GroupingMode::Tree,
         };
         let groups = vec![
             AppGroup {
@@ -236,6 +388,7 @@ mod tests {
             app_cap: 40.0,
             pressure_threshold: 85.0,
             top_offenders: 1,
+            grouping: GroupingMode::Tree,
         };
         let groups = vec![AppGroup {
             key: 10,
