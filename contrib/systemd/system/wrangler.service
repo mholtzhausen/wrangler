@@ -1,0 +1,13 @@
+[Unit]
+Description=Wrangler process CPU throttle daemon (system)
+Documentation=https://github.com/mholtzhausen/wrangler
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wrangler --daemon --no-tray --foreground --cgroups
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

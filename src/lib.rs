@@ -10,6 +10,8 @@ pub mod monitor;
 pub mod policy;
 pub mod runtime;
 pub mod session_env;
+#[cfg(target_os = "linux")]
+pub mod service;
 pub mod throttle;
 pub mod ui;
 
@@ -17,7 +19,7 @@ pub mod ui;
 pub mod tray;
 
 use clap::Parser;
-use cli::Cli;
+use cli::{Cli, Commands};
 use crossterm::{
     event::DisableMouseCapture,
     execute,
@@ -39,6 +41,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     session_env::restore_invoking_user_session();
 
     let cli = Cli::parse();
+
+    #[cfg(target_os = "linux")]
+    if let Some(Commands::Service(service_args)) = &cli.command {
+        return service::run(&service_args.command);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    if cli.command.is_some() {
+        return Err("service commands are only supported on Linux".into());
+    }
 
     if cli.status {
         return print_daemon_status().await;

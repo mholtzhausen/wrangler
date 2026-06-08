@@ -75,6 +75,7 @@ help:
 	@echo "  make run-daemon   Run background daemon with system tray"
 	@echo "  make run-daemon-release  Run release daemon"
 	@echo "  make install-systemd     Install user systemd unit"
+	@echo "  wrangler service install --sudo   Install system systemd unit (cgroups)"
 	@echo "  make test         Run tests"
 	@echo "  make ci           Run fmt-check, clippy, and test (matches CI check job)"
 	@echo "  make e2e          Run end-to-end throttle smoke test (needs stress-ng)"

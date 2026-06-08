@@ -89,7 +89,9 @@ The legacy `threshold` key is still accepted on load and maps to `app_cap`. On f
 
 CLI flags override the file for that invocation. App cap changes from the dashboard are saved automatically.
 
-## Systemd user service
+## Systemd services
+
+### User service (tray, no root)
 
 ```bash
 make install-systemd
@@ -97,6 +99,18 @@ systemctl --user enable --now wrangler.service
 ```
 
 Unit file: `contrib/systemd/user/wrangler.service`
+
+### System service (cgroups, root)
+
+Install a headless system-wide daemon with cgroup throttling:
+
+```bash
+wrangler service install --sudo
+wrangler service status --sudo
+wrangler service uninstall --sudo
+```
+
+This copies the binary to `/usr/local/bin/wrangler`, installs `/etc/systemd/system/wrangler.service`, and enables the service. Use `--sudo` when not running as root. Unit template: `contrib/systemd/system/wrangler.service`.
 
 ## CLI reference
 
@@ -112,6 +126,9 @@ Unit file: `contrib/systemd/user/wrangler.service`
 | `--no-tray` | Daemon without system tray |
 | `--attach` | Connect TUI to running daemon |
 | `--status` | Print daemon state as JSON and exit |
+| `service status` | Show systemd system service status |
+| `service install --sudo` | Install and start systemd system service |
+| `service uninstall --sudo` | Remove systemd system service |
 
 ## Permissions
 

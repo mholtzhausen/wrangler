@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::time::Duration;
 
@@ -7,9 +7,41 @@ use crate::daemon::is_detached_child;
 use crate::policy::GroupingMode;
 use crate::runtime::RuntimeSettings;
 
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    /// Manage the systemd system service
+    Service(ServiceArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct ServiceArgs {
+    #[command(subcommand)]
+    pub command: ServiceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceCommand {
+    /// Show systemd service status
+    Status(ServiceOptions),
+    /// Install systemd system service, enable, and start it
+    Install(ServiceOptions),
+    /// Stop, disable, and remove systemd system service
+    Uninstall(ServiceOptions),
+}
+
+#[derive(Debug, Parser, Default)]
+pub struct ServiceOptions {
+    /// Run privileged operations via sudo
+    #[arg(long)]
+    pub sudo: bool,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "wrangler", about = "Process monitor and CPU throttle TUI")]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+
     /// Max % of machine CPU per app group (throttled when system is under pressure)
     #[arg(long, visible_alias = "threshold")]
     pub app_cap: Option<f32>,
@@ -115,6 +147,7 @@ mod tests {
             use_cgroups: false,
         };
         let cli = Cli {
+            command: None,
             app_cap: Some(45.0),
             pressure_threshold: None,
             interval: Some(750),
@@ -143,6 +176,7 @@ mod tests {
             use_cgroups: false,
         };
         let cli = Cli {
+            command: None,
             app_cap: None,
             pressure_threshold: None,
             interval: None,
@@ -183,5 +217,38 @@ mod tests {
     fn grouping_flag_parses_name_mode() {
         let cli = Cli::try_parse_from(["wrangler", "--grouping", "name"]).unwrap();
         assert_eq!(cli.grouping, Some(GroupingMode::Name));
+    }
+
+    #[test]
+    fn service_install_parses_sudo_flag() {
+        let cli = Cli::try_parse_from(["wrangler", "service", "install", "--sudo"]).unwrap();
+        match cli.command {
+            Some(Commands::Service(ServiceArgs {
+                command: ServiceCommand::Install(opts),
+            })) => assert!(opts.sudo),
+            other => panic!("expected service install, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_status_parses_without_sudo() {
+        let cli = Cli::try_parse_from(["wrangler", "service", "status"]).unwrap();
+        match cli.command {
+            Some(Commands::Service(ServiceArgs {
+                command: ServiceCommand::Status(opts),
+            })) => assert!(!opts.sudo),
+            other => panic!("expected service status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_uninstall_parses() {
+        let cli = Cli::try_parse_from(["wrangler", "service", "uninstall", "--sudo"]).unwrap();
+        match cli.command {
+            Some(Commands::Service(ServiceArgs {
+                command: ServiceCommand::Uninstall(opts),
+            })) => assert!(opts.sudo),
+            other => panic!("expected service uninstall, got {other:?}"),
+        }
     }
 }
