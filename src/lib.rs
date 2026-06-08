@@ -1,4 +1,5 @@
 pub mod app;
+pub mod binary_install;
 pub mod cli;
 pub mod config;
 pub mod daemon;
@@ -17,6 +18,8 @@ pub mod ui;
 
 #[cfg(target_os = "linux")]
 pub mod tray;
+#[cfg(target_os = "linux")]
+pub mod tray_client;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -42,18 +45,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    #[cfg(target_os = "linux")]
-    if let Some(Commands::Service(service_args)) = &cli.command {
-        return service::run(&service_args.command);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    if cli.command.is_some() {
-        return Err("service commands are only supported on Linux".into());
+    match &cli.command {
+        Some(Commands::Install(opts)) => return binary_install::install(opts),
+        Some(Commands::Uninstall(opts)) => return binary_install::uninstall(opts),
+        #[cfg(target_os = "linux")]
+        Some(Commands::Service(service_args)) => return service::run(&service_args.command),
+        #[cfg(not(target_os = "linux"))]
+        Some(Commands::Service(_)) => {
+            return Err("service commands are only supported on Linux".into());
+        }
+        None => {}
     }
 
     if cli.status {
         return print_daemon_status().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    if cli.tray_client {
+        return tray_client::run().await;
     }
 
     let settings = cli.resolve();

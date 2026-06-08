@@ -43,6 +43,7 @@ pub async fn spawn_server(
     }
 
     let listener = UnixListener::bind(&path)?;
+    fix_socket_permissions(&path)?;
     tracing::info!(path = %path.display(), "IPC server listening");
 
     let accept_task = tokio::spawn(async move {
@@ -86,6 +87,7 @@ pub enum ClientRequest {
     #[serde(alias = "set_threshold")]
     SetThreshold { value: f32 },
     Detach,
+    Quit,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -94,6 +96,52 @@ pub enum ServerMessage {
     Ok,
     Error { message: String },
     State { data: Box<AppState> },
+}
+
+fn socket_owner_uid() -> Option<u32> {
+    if let Ok(uid) = std::env::var("WRANGLER_SOCKET_UID") {
+        if let Ok(parsed) = uid.parse() {
+            return Some(parsed);
+        }
+    }
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .or_else(|_| std::env::var("WRANGLER_RUNTIME_DIR"))
+        .ok()?;
+    let name = std::path::Path::new(&dir).file_name()?.to_str()?;
+    name.parse().ok()
+}
+
+#[cfg(unix)]
+fn fix_socket_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use nix::unistd::{chown, geteuid, Gid, Uid, User};
+
+    if !geteuid().is_root() {
+        return Ok(());
+    }
+
+    let Some(uid) = socket_owner_uid() else {
+        tracing::warn!("running as root but could not determine socket owner; clients may be unable to connect");
+        return Ok(());
+    };
+
+    let gid = User::from_uid(Uid::from_raw(uid))
+        .ok()
+        .flatten()
+        .map(|user| user.gid)
+        .unwrap_or_else(|| Gid::from_raw(uid));
+
+    chown(path, Some(Uid::from_raw(uid)), Some(gid)).map_err(|errno| {
+        std::io::Error::from_raw_os_error(errno as i32)
+    })?;
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn fix_socket_permissions(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 pub async fn daemon_running() -> bool {
@@ -194,6 +242,10 @@ async fn handle_client(
                 let _ = send_message(&out_tx, ServerMessage::Ok).await;
             }
             ClientRequest::Detach => break,
+            ClientRequest::Quit => {
+                let _ = hub_tx.send(HubCommand::Quit).await;
+                let _ = send_message(&out_tx, ServerMessage::Ok).await;
+            }
         }
     }
 
@@ -300,10 +352,36 @@ impl AttachSession {
         let _ = self.request_tx.send(ClientRequest::Detach).await;
         Ok(())
     }
+
+    pub async fn quit_daemon(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.request_tx.send(ClientRequest::Quit).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_owner_uid_parses_runtime_dir() {
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        assert_eq!(socket_owner_uid(), Some(1000));
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+
+    #[test]
+    fn socket_owner_uid_prefers_explicit_override() {
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        std::env::set_var("WRANGLER_SOCKET_UID", "1001");
+        assert_eq!(socket_owner_uid(), Some(1001));
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var("WRANGLER_SOCKET_UID");
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
     use super::*;
     use crate::event::spawn_event_hub;
     use crate::throttle::ThrottleBackend;

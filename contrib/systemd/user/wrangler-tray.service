@@ -1,12 +1,12 @@
 [Unit]
-Description=Wrangler process CPU throttle daemon
+Description=Wrangler system tray (connects to root daemon)
 Documentation=https://github.com/mholtzhausen/wrangler
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/wrangler --daemon --foreground
+ExecStart=%h/.local/bin/wrangler --tray-client --foreground
 Restart=on-failure
 RestartSec=5
 

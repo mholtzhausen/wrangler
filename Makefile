@@ -57,12 +57,8 @@ clean:
 install: release
 	$(CARGO) install --path . --force
 
-install-systemd: install
-	mkdir -p $(HOME)/.config/systemd/user
-	sed 's|%h/.cargo/bin/wrangler|$(HOME)/.cargo/bin/wrangler|' contrib/systemd/user/wrangler.service > $(HOME)/.config/systemd/user/wrangler.service
-	systemctl --user daemon-reload
-	@echo "Installed $(HOME)/.config/systemd/user/wrangler.service"
-	@echo "Enable with: systemctl --user enable --now wrangler.service"
+install-systemd: release
+	$(TARGET_RELEASE) service install
 
 help:
 	@echo "Wrangler — process monitor and CPU throttle TUI"
@@ -75,7 +71,9 @@ help:
 	@echo "  make run-daemon   Run background daemon with system tray"
 	@echo "  make run-daemon-release  Run release daemon"
 	@echo "  make install-systemd     Install user systemd unit"
-	@echo "  wrangler service install --sudo   Install system systemd unit (cgroups)"
+	@echo "  wrangler install --sudo           Install binary to /usr/local/bin"
+	@echo "  wrangler service install          Install user systemd unit (tray)"
+	@echo "  wrangler service install --sudo   Install system systemd unit (cgroups + tray)"
 	@echo "  make test         Run tests"
 	@echo "  make ci           Run fmt-check, clippy, and test (matches CI check job)"
 	@echo "  make e2e          Run end-to-end throttle smoke test (needs stress-ng)"

@@ -27,6 +27,13 @@ make release
 # binary: target/release/wrangler
 ```
 
+Install the binary system-wide:
+
+```bash
+wrangler install --sudo
+wrangler uninstall --sudo
+```
+
 ## Quick start
 
 ### Interactive TUI (standalone)
@@ -91,18 +98,17 @@ CLI flags override the file for that invocation. App cap changes from the dashbo
 
 ## Systemd services
 
-### User service (tray, no root)
+### User service (tray, recommended for desktop)
 
 ```bash
-make install-systemd
-systemctl --user enable --now wrangler.service
+wrangler service install
+wrangler service status
+wrangler service uninstall
 ```
 
-Unit file: `contrib/systemd/user/wrangler.service`
+Installs `~/.local/bin/wrangler` and a tray-enabled user unit under `~/.config/systemd/user/`. The service starts with your graphical session.
 
-### System service (cgroups, root)
-
-Install a headless system-wide daemon with cgroup throttling:
+### System service (cgroups + tray, root)
 
 ```bash
 wrangler service install --sudo
@@ -110,7 +116,9 @@ wrangler service status --sudo
 wrangler service uninstall --sudo
 ```
 
-This copies the binary to `/usr/local/bin/wrangler`, installs `/etc/systemd/system/wrangler.service`, and enables the service. Use `--sudo` when not running as root. Unit template: `contrib/systemd/system/wrangler.service`.
+Installs `/usr/local/bin/wrangler`, a headless root system unit for cgroup throttling, and a per-user `wrangler-tray.service` that runs `wrangler --tray-client` in your desktop session (root cannot use your D-Bus tray directly). Re-install after switching primary desktop users.
+
+`make install-systemd` is equivalent to `wrangler service install`.
 
 ## CLI reference
 
@@ -126,9 +134,14 @@ This copies the binary to `/usr/local/bin/wrangler`, installs `/etc/systemd/syst
 | `--no-tray` | Daemon without system tray |
 | `--attach` | Connect TUI to running daemon |
 | `--status` | Print daemon state as JSON and exit |
-| `service status` | Show systemd system service status |
-| `service install --sudo` | Install and start systemd system service |
-| `service uninstall --sudo` | Remove systemd system service |
+| `service install` | Install tray-enabled user systemd service |
+| `service status` | Show user systemd service status |
+| `service uninstall` | Remove user systemd service |
+| `service install --sudo` | Install system service (cgroups + tray) |
+| `service status --sudo` | Show system service status |
+| `service uninstall --sudo` | Remove system service |
+| `install --sudo` | Install binary to `/usr/local/bin/wrangler` |
+| `uninstall --sudo` | Remove binary from `/usr/local/bin/wrangler` |
 
 ## Permissions
 

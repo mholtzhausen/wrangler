@@ -11,6 +11,17 @@ use crate::runtime::RuntimeSettings;
 pub enum Commands {
     /// Manage the systemd system service
     Service(ServiceArgs),
+    /// Install wrangler binary to /usr/local/bin/wrangler
+    Install(InstallOptions),
+    /// Remove wrangler binary from /usr/local/bin/wrangler
+    Uninstall(InstallOptions),
+}
+
+#[derive(Debug, Parser, Default)]
+pub struct InstallOptions {
+    /// Run privileged operations via sudo
+    #[arg(long)]
+    pub sudo: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -23,9 +34,9 @@ pub struct ServiceArgs {
 pub enum ServiceCommand {
     /// Show systemd service status
     Status(ServiceOptions),
-    /// Install systemd system service, enable, and start it
+    /// Install systemd service (user unit, or system unit with --sudo)
     Install(ServiceOptions),
-    /// Stop, disable, and remove systemd system service
+    /// Stop, disable, and remove systemd service
     Uninstall(ServiceOptions),
 }
 
@@ -81,6 +92,10 @@ pub struct Cli {
     /// Print daemon state as JSON and exit (requires a running daemon)
     #[arg(long)]
     pub status: bool,
+
+    /// Run a tray icon that connects to an existing daemon (used by systemd tray service)
+    #[arg(long)]
+    pub tray_client: bool,
 }
 
 impl Cli {
@@ -158,6 +173,7 @@ mod tests {
             no_tray: false,
             attach: false,
             status: false,
+            tray_client: false,
         };
         let settings = cli.resolve_with(&file);
         assert_eq!(settings.app_cap, 45.0);
@@ -187,6 +203,7 @@ mod tests {
             no_tray: false,
             attach: false,
             status: false,
+            tray_client: false,
         };
         let settings = cli.resolve_with(&file);
         assert_eq!(settings.app_cap, 60.0);
@@ -249,6 +266,24 @@ mod tests {
                 command: ServiceCommand::Uninstall(opts),
             })) => assert!(opts.sudo),
             other => panic!("expected service uninstall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_command_parses_sudo_flag() {
+        let cli = Cli::try_parse_from(["wrangler", "install", "--sudo"]).unwrap();
+        match cli.command {
+            Some(Commands::Install(opts)) => assert!(opts.sudo),
+            other => panic!("expected install command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uninstall_command_parses() {
+        let cli = Cli::try_parse_from(["wrangler", "uninstall"]).unwrap();
+        match cli.command {
+            Some(Commands::Uninstall(opts)) => assert!(!opts.sudo),
+            other => panic!("expected uninstall command, got {other:?}"),
         }
     }
 }
