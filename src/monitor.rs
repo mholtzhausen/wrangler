@@ -1,11 +1,12 @@
-use crate::app::{AppGroupInfo, ProcessInfo};
+use crate::app::{identities_for_pids, AppGroupInfo, ProcessInfo};
 use crate::event::HubCommand;
 use crate::policy::{
     build_groups, effective_protected_apps, evaluate, group_by_key, GroupingMode,
     PolicySettings, RawProcess, ThrottleDecision,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+use nix::unistd::{Group, Gid, User, Uid};
 use sysinfo::{CpuRefreshKind, ProcessRefreshKind, System};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
@@ -45,6 +46,7 @@ pub async fn run_monitor(
         let mut processes: Vec<ProcessInfo> = Vec::new();
         let mut raw: Vec<RawProcess> = Vec::new();
         let mut seen_pids: HashSet<u32> = HashSet::new();
+        let mut identity_cache: HashMap<(u32, u32), (String, String)> = HashMap::new();
 
         for (pid, process) in sys.processes() {
             let pid_u32 = pid.as_u32();
@@ -56,17 +58,26 @@ pub async fn run_monitor(
             let parent_pid = process.parent().map(|p| p.as_u32());
             let cpu = process.cpu_usage();
             let name = process.name().to_string();
+            let (user, group) = resolve_identity(
+                process.user_id(),
+                process.group_id(),
+                &mut identity_cache,
+            );
 
             raw.push(RawProcess {
                 pid: pid_u32,
                 parent_pid,
                 name: name.clone(),
+                user: user.clone(),
+                group: group.clone(),
                 cpu_usage: cpu,
             });
             processes.push(ProcessInfo {
                 pid: pid_u32,
                 parent_pid,
                 name,
+                user,
+                group,
                 cpu_usage: cpu,
             });
         }
@@ -129,7 +140,20 @@ pub async fn run_monitor(
             throttled_groups.remove(&key);
         }
 
-        let group_infos: Vec<AppGroupInfo> = groups.iter().map(AppGroupInfo::from).collect();
+        let group_infos: Vec<AppGroupInfo> = groups
+            .iter()
+            .map(|group| {
+                let (user, group_name) = identities_for_pids(&group.pids, &processes);
+                AppGroupInfo {
+                    group_key: group.key,
+                    name: group.name.clone(),
+                    user,
+                    group: group_name,
+                    pids: group.pids.clone(),
+                    cpu_total: group.cpu_total,
+                }
+            })
+            .collect();
         let _ = hub_tx
             .send(HubCommand::ProcessSnapshot {
                 processes,
@@ -197,6 +221,37 @@ async fn apply_decision(
                 .await;
         }
     }
+}
+
+fn resolve_identity(
+    uid: Option<&sysinfo::Uid>,
+    gid: Option<sysinfo::Gid>,
+    cache: &mut HashMap<(u32, u32), (String, String)>,
+) -> (String, String) {
+    let uid_val = uid.map(|value| **value).unwrap_or(u32::MAX);
+    let gid_val = gid.map(|value| *value).unwrap_or(u32::MAX);
+    if let Some(hit) = cache.get(&(uid_val, gid_val)) {
+        return hit.clone();
+    }
+
+    let user = if uid_val == u32::MAX {
+        "?".to_string()
+    } else if let Ok(Some(account)) = User::from_uid(Uid::from_raw(uid_val)) {
+        account.name
+    } else {
+        uid_val.to_string()
+    };
+
+    let group = if gid_val == u32::MAX {
+        "?".to_string()
+    } else if let Ok(Some(account)) = Group::from_gid(Gid::from_raw(gid_val)) {
+        account.name
+    } else {
+        gid_val.to_string()
+    };
+
+    cache.insert((uid_val, gid_val), (user.clone(), group.clone()));
+    (user, group)
 }
 
 fn global_cpu_usage(sys: &System) -> f32 {

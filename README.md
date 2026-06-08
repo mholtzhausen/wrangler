@@ -37,7 +37,7 @@ cargo run
 make run
 ```
 
-Keys: **g** flat/grouped view (grouped by default), **o** expand group, **+/-** app cap, **Up/Down** scroll, **q/Esc** quit. Grouped view shows CPU as % of total machine capacity.
+Keys: **g** flat/grouped view (grouped by default), **o** expand group, **+/-** app cap, **Up/Down** scroll, **q/Esc** quit. The process table shows per-core **CPU %**, total **Machine %**, plus **User** and **Group** for each row.
 
 ### Background daemon + tray
 

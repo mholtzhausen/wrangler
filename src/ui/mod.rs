@@ -315,11 +315,22 @@ fn selection_style(base: Style, selected: bool) -> Style {
     }
 }
 
+fn truncate_label(value: &str, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    format!(
+        "{}…",
+        value.chars().take(keep).collect::<String>()
+    )
+}
+
 fn row_to_cells<'a>(
     row: &'a DisplayRow<'a>,
     row_index: usize,
     selected_index: usize,
-    view_mode: ViewMode,
     num_cores: usize,
 ) -> Row<'a> {
     let selected = row_index == selected_index;
@@ -337,10 +348,7 @@ fn row_to_cells<'a>(
             } else {
                 style = style.fg(Color::Cyan);
             }
-            let cpu = match view_mode {
-                ViewMode::Grouped => machine_cpu_share(group.cpu_total, num_cores),
-                ViewMode::Flat => group.cpu_total,
-            };
+            let machine = machine_cpu_share(group.cpu_total, num_cores);
             Row::new(vec![
                 Cell::from(format!("{marker}{arrow} {}", group.group_key)),
                 Cell::from(format!(
@@ -348,7 +356,10 @@ fn row_to_cells<'a>(
                     group.name,
                     group.pids.len()
                 )),
-                Cell::from(format!("{cpu:.1}%")),
+                Cell::from(truncate_label(&group.user, 12)),
+                Cell::from(truncate_label(&group.group, 12)),
+                Cell::from(format!("{:.1}%", group.cpu_total)),
+                Cell::from(format!("{machine:.1}%")),
             ])
             .style(selection_style(style, selected))
         }
@@ -362,15 +373,14 @@ fn row_to_cells<'a>(
                 style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
             }
             let prefix = if *indented { "  └ " } else { "" };
-            let cpu = if view_mode == ViewMode::Grouped && *indented {
-                machine_cpu_share(process.cpu_usage, num_cores)
-            } else {
-                process.cpu_usage
-            };
+            let machine = machine_cpu_share(process.cpu_usage, num_cores);
             Row::new(vec![
                 Cell::from(format!("{prefix}{}", process.pid)),
                 Cell::from(process.name.as_str()),
-                Cell::from(format!("{cpu:.1}%")),
+                Cell::from(truncate_label(&process.user, 12)),
+                Cell::from(truncate_label(&process.group, 12)),
+                Cell::from(format!("{:.1}%", process.cpu_usage)),
+                Cell::from(format!("{machine:.1}%")),
             ])
             .style(selection_style(style, selected))
         }
@@ -479,33 +489,27 @@ fn draw_ui(
     let rows: Vec<Row> = display_rows
         .iter()
         .enumerate()
-        .map(|(index, row)| {
-            row_to_cells(
-                row,
-                index,
-                selected_index,
-                view_mode,
-                state.num_cores,
-            )
-        })
+        .map(|(index, row)| row_to_cells(row, index, selected_index, state.num_cores))
         .collect();
 
-    let cpu_header = match view_mode {
-        ViewMode::Grouped => "Machine %",
-        ViewMode::Flat => "CPU %",
-    };
     let header_row = Row::new(vec![
         Cell::from("PID/Key").style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from("Process / Group").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from(cpu_header).style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("User").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Group").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("CPU %").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Machine %").style(Style::default().add_modifier(Modifier::BOLD)),
     ]);
 
     let table = Table::new(
         rows,
         [
             Constraint::Length(12),
-            Constraint::Min(16),
-            Constraint::Length(8),
+            Constraint::Min(12),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(7),
+            Constraint::Length(9),
         ],
     )
     .header(header_row)

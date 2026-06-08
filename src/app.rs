@@ -8,6 +8,8 @@ pub struct ProcessInfo {
     pub pid: u32,
     pub parent_pid: Option<u32>,
     pub name: String,
+    pub user: String,
+    pub group: String,
     pub cpu_usage: f32,
 }
 
@@ -15,8 +17,35 @@ pub struct ProcessInfo {
 pub struct AppGroupInfo {
     pub group_key: u32,
     pub name: String,
+    pub user: String,
+    pub group: String,
     pub pids: Vec<u32>,
     pub cpu_total: f32,
+}
+
+pub fn summarize_identities<'a, I>(values: I) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut unique: Vec<&str> = values.filter(|value| !value.is_empty()).collect();
+    unique.sort_unstable();
+    unique.dedup();
+    match unique.len() {
+        0 => "-".to_string(),
+        1 => unique[0].to_string(),
+        _ => unique.join(","),
+    }
+}
+
+pub fn identities_for_pids(pids: &[u32], processes: &[ProcessInfo]) -> (String, String) {
+    let members: Vec<&ProcessInfo> = pids
+        .iter()
+        .filter_map(|pid| processes.iter().find(|process| process.pid == *pid))
+        .collect();
+    (
+        summarize_identities(members.iter().map(|process| process.user.as_str())),
+        summarize_identities(members.iter().map(|process| process.group.as_str())),
+    )
 }
 
 impl From<AppGroup> for AppGroupInfo {
@@ -24,6 +53,8 @@ impl From<AppGroup> for AppGroupInfo {
         Self {
             group_key: group.key,
             name: group.name,
+            user: "-".to_string(),
+            group: "-".to_string(),
             pids: group.pids,
             cpu_total: group.cpu_total,
         }
@@ -35,6 +66,8 @@ impl From<&AppGroup> for AppGroupInfo {
         Self {
             group_key: group.key,
             name: group.name.clone(),
+            user: "-".to_string(),
+            group: "-".to_string(),
             pids: group.pids.clone(),
             cpu_total: group.cpu_total,
         }
@@ -122,5 +155,20 @@ impl AppState {
             let drain = self.throttle_log.len() - 50;
             self.throttle_log.drain(0..drain);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_identities_collapses_duplicates() {
+        assert_eq!(summarize_identities(["alice"].into_iter()), "alice");
+        assert_eq!(
+            summarize_identities(["bob", "alice", "bob"].into_iter()),
+            "alice,bob"
+        );
+        assert_eq!(summarize_identities([].into_iter()), "-");
     }
 }

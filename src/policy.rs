@@ -47,6 +47,8 @@ pub struct RawProcess {
     pub pid: u32,
     pub parent_pid: Option<u32>,
     pub name: String,
+    pub user: String,
+    pub group: String,
     pub cpu_usage: f32,
 }
 
@@ -269,6 +271,8 @@ mod tests {
             pid,
             parent_pid: parent,
             name: name.to_string(),
+            user: "user".to_string(),
+            group: "user".to_string(),
             cpu_usage: cpu,
         }
     }
