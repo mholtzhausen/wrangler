@@ -20,6 +20,7 @@ use crossterm::{
     event::DisableMouseCapture,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
 };
 use event::HubCommand;
 use ipc::AttachSession;
@@ -42,10 +43,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = cli.resolve();
 
-    if cli.daemon {
+    if cli.daemon_mode() {
         if ipc::daemon_running().await {
             tracing::error!("wrangler daemon is already running");
             std::process::exit(1);
+        }
+        if cli.should_detach_from_terminal() {
+            config::Config::from_settings(&settings).save()?;
+            daemon::spawn_detached_child()?;
         }
         let _lock = instance::acquire_daemon_lock()?;
         config::Config::from_settings(&settings).save()?;
@@ -161,6 +166,13 @@ async fn run_tui_loop(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, DisableMouseCapture)?;
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        )
+    );
     let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
     tokio::select! {
@@ -173,7 +185,12 @@ async fn run_tui_loop(
     }
 
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        io::stdout(),
+        PopKeyboardEnhancementFlags,
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
 
     Ok(())
 }

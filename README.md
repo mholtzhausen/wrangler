@@ -42,7 +42,8 @@ Keys: **Up/Down** adjust threshold, **q/Esc** quit.
 ```bash
 make run-daemon
 # or
-target/release/wrangler --daemon
+target/release/wrangler --tray
+# equivalent to --daemon (detaches from the terminal; lives in the system tray)
 ```
 
 Right-click the tray icon:
@@ -55,6 +56,8 @@ Headless daemon (no tray):
 ```bash
 wrangler --daemon --no-tray
 ```
+
+When started from an interactive terminal, daemon mode returns control to your shell immediately and keeps running in the background. Use `--foreground` to stay attached (systemd, debugging).
 
 ### Attach to a running daemon
 
@@ -92,7 +95,8 @@ Unit file: `contrib/systemd/user/wrangler.service`
 | `--threshold` | CPU % threshold (default: from config or 80) |
 | `--interval` | Poll interval in ms (default: from config or 1000) |
 | `--cgroups` | Use cgroups v2 instead of signals |
-| `--daemon` | Run monitor/throttle in background |
+| `--daemon`, `--tray` | Run monitor/throttle in background (detaches from terminal) |
+| `--foreground` | Keep daemon attached (systemd, debugging) |
 | `--no-tray` | Daemon without system tray |
 | `--attach` | Connect TUI to running daemon |
 | `--status` | Print daemon state as JSON and exit |

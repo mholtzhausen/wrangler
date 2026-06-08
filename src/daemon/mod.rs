@@ -1,8 +1,12 @@
+mod detach;
+
 use crate::cli::Cli;
 use crate::dashboard;
 use crate::event::HubCommand;
 use crate::runtime::{CoreRuntime, RuntimeSettings};
 use tokio::sync::mpsc;
+
+pub use detach::{is_detached_child, spawn_detached_child};
 
 #[cfg(target_os = "linux")]
 use crate::tray::{self, TrayAction};

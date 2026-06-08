@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> starting daemon (threshold 25%, interval 500ms)"
-"$BIN" --daemon --no-tray --threshold 25 --interval 500 &
+"$BIN" --daemon --no-tray --foreground --threshold 25 --interval 500 &
 DAEMON_PID=$!
 
 echo "==> waiting for daemon IPC"

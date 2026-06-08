@@ -81,5 +81,5 @@ help:
 	@echo "Runtime flags (examples):"
 	@echo "  cargo run -- --threshold 50 --interval 500"
 	@echo "  sudo $(TARGET_RELEASE) --cgroups --threshold 80"
-	@echo "  $(TARGET_RELEASE) --daemon"
+	@echo "  $(TARGET_RELEASE) --tray"
 	@echo "  $(TARGET_RELEASE) --daemon --no-tray"
