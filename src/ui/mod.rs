@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 pub enum UiAction {
-    SetThreshold(f32),
+    SetAppCap(f32),
     Quit,
 }
 
@@ -136,13 +136,13 @@ async fn handle_key(
             Ok(true)
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
-            let new = (state.cpu_threshold + 5.0).min(100.0);
-            let _ = action_tx.send(UiAction::SetThreshold(new)).await;
+            let new = (state.app_cap + 5.0).min(100.0);
+            let _ = action_tx.send(UiAction::SetAppCap(new)).await;
             Ok(false)
         }
         KeyCode::Char('-') | KeyCode::Char('_') => {
-            let new = (state.cpu_threshold - 5.0).max(1.0);
-            let _ = action_tx.send(UiAction::SetThreshold(new)).await;
+            let new = (state.app_cap - 5.0).max(1.0);
+            let _ = action_tx.send(UiAction::SetAppCap(new)).await;
             Ok(false)
         }
         KeyCode::Down | KeyCode::Char('j') | KeyCode::PageDown => {
@@ -233,9 +233,13 @@ fn draw_ui(
         "standalone"
     };
 
+    let machine_budget = crate::policy::machine_cpu_budget(state.app_cap, state.num_cores);
     let header = Paragraph::new(format!(
-        "Threshold: {:.1}% ({mode_hint}) | [+/-] threshold | [Up/Down] scroll | [q/Esc] quit",
-        state.cpu_threshold
+        "System: {:.0}% | App cap: {:.0}% of machine ({:.0}% on {} cores, {mode_hint}) | [+/-] cap | [Up/Down] scroll | [q/Esc] quit",
+        state.global_cpu,
+        state.app_cap,
+        machine_budget,
+        state.num_cores,
     ))
     .block(
         Block::default()
@@ -320,16 +324,24 @@ fn draw_ui(
         );
     }
 
-    let throttled: Vec<String> = state.throttled_pids.iter().map(|p| p.to_string()).collect();
+    let throttled_groups: Vec<String> = state
+        .throttled_groups
+        .iter()
+        .map(|g| format!("{} [{}] ({:.0}%)", g.name, g.group_key, g.cpu_total))
+        .collect();
     let recent_log: Vec<String> = state
         .throttle_log
         .iter()
         .rev()
         .take(3)
-        .map(|e| format!("PID {}: {}", e.pid, e.message))
+        .map(|e| format!("{}: {}", e.pid, e.message))
         .collect();
 
-    let mut footer_text = format!("Throttled PIDs: [{}]", throttled.join(", "));
+    let mut footer_text = format!(
+        "Pressure >= {:.0}% | Throttled groups: [{}]",
+        state.pressure_threshold,
+        throttled_groups.join(", ")
+    );
     if let Some(err) = &state.last_error {
         footer_text.push_str(&format!(" | Error: {err}"));
     }

@@ -5,13 +5,19 @@ use std::path::PathBuf;
 
 use crate::runtime::RuntimeSettings;
 
-pub const DEFAULT_THRESHOLD: f32 = 80.0;
+pub const DEFAULT_APP_CAP: f32 = 40.0;
+pub const DEFAULT_PRESSURE_THRESHOLD: f32 = 85.0;
+pub const DEFAULT_TOP_OFFENDERS: usize = 1;
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_threshold")]
-    pub threshold: f32,
+    #[serde(default = "default_app_cap", alias = "threshold")]
+    pub app_cap: f32,
+    #[serde(default = "default_pressure_threshold")]
+    pub pressure_threshold: f32,
+    #[serde(default = "default_top_offenders")]
+    pub top_offenders: usize,
     #[serde(default = "default_interval_ms")]
     pub interval_ms: u64,
     #[serde(default)]
@@ -21,23 +27,37 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            threshold: DEFAULT_THRESHOLD,
+            app_cap: DEFAULT_APP_CAP,
+            pressure_threshold: DEFAULT_PRESSURE_THRESHOLD,
+            top_offenders: DEFAULT_TOP_OFFENDERS,
             interval_ms: DEFAULT_INTERVAL_MS,
             use_cgroups: false,
         }
     }
 }
 
-fn default_threshold() -> f32 {
-    DEFAULT_THRESHOLD
+fn default_app_cap() -> f32 {
+    DEFAULT_APP_CAP
+}
+
+fn default_pressure_threshold() -> f32 {
+    DEFAULT_PRESSURE_THRESHOLD
+}
+
+fn default_top_offenders() -> usize {
+    DEFAULT_TOP_OFFENDERS
 }
 
 fn default_interval_ms() -> u64 {
     DEFAULT_INTERVAL_MS
 }
 
-pub fn clamp_threshold(value: f32) -> f32 {
+pub fn clamp_app_cap(value: f32) -> f32 {
     value.clamp(1.0, 100.0)
+}
+
+pub fn clamp_pressure_threshold(value: f32) -> f32 {
+    value.clamp(0.0, 100.0)
 }
 
 pub fn config_path() -> PathBuf {
@@ -86,20 +106,22 @@ impl Config {
 
     pub fn from_settings(settings: &RuntimeSettings) -> Self {
         Self {
-            threshold: settings.threshold,
+            app_cap: settings.app_cap,
+            pressure_threshold: settings.pressure_threshold,
+            top_offenders: settings.top_offenders,
             interval_ms: settings.interval.as_millis() as u64,
             use_cgroups: settings.cgroups,
         }
     }
 
-    pub fn update_threshold(threshold: f32) -> io::Result<()> {
+    pub fn update_app_cap(app_cap: f32) -> io::Result<()> {
         let path = config_path();
-        Self::update_threshold_at(&path, threshold)
+        Self::update_app_cap_at(&path, app_cap)
     }
 
-    pub fn update_threshold_at(path: &std::path::Path, threshold: f32) -> io::Result<()> {
+    pub fn update_app_cap_at(path: &std::path::Path, app_cap: f32) -> io::Result<()> {
         let mut config = Self::load_from(path);
-        config.threshold = clamp_threshold(threshold);
+        config.app_cap = clamp_app_cap(app_cap);
         config.save_to(path)
     }
 }
@@ -121,17 +143,19 @@ mod tests {
     }
 
     #[test]
-    fn clamp_threshold_bounds() {
-        assert_eq!(clamp_threshold(0.0), 1.0);
-        assert_eq!(clamp_threshold(50.0), 50.0);
-        assert_eq!(clamp_threshold(150.0), 100.0);
+    fn clamp_app_cap_bounds() {
+        assert_eq!(clamp_app_cap(0.0), 1.0);
+        assert_eq!(clamp_app_cap(50.0), 50.0);
+        assert_eq!(clamp_app_cap(150.0), 100.0);
     }
 
     #[test]
     fn save_and_load_roundtrip() {
         let path = temp_config_path();
         let config = Config {
-            threshold: 55.0,
+            app_cap: 55.0,
+            pressure_threshold: 80.0,
+            top_offenders: 2,
             interval_ms: 500,
             use_cgroups: true,
         };
@@ -142,11 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn update_threshold_persists() {
+    fn update_app_cap_persists() {
         let path = temp_config_path();
         Config::default().save_to(&path).unwrap();
-        Config::update_threshold_at(&path, 42.0).unwrap();
-        assert_eq!(Config::load_from(&path).threshold, 42.0);
+        Config::update_app_cap_at(&path, 42.0).unwrap();
+        assert_eq!(Config::load_from(&path).app_cap, 42.0);
         let _ = fs::remove_file(path);
     }
 
@@ -154,5 +178,13 @@ mod tests {
     fn missing_file_returns_defaults() {
         let path = temp_config_path();
         assert_eq!(Config::load_from(&path), Config::default());
+    }
+
+    #[test]
+    fn legacy_threshold_key_loads_as_app_cap() {
+        let path = temp_config_path();
+        fs::write(&path, "threshold = 33.0\n").unwrap();
+        assert_eq!(Config::load_from(&path).app_cap, 33.0);
+        let _ = fs::remove_file(path);
     }
 }

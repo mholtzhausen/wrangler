@@ -2,13 +2,16 @@ use std::time::Duration;
 
 use crate::cli::Cli;
 use crate::event::{spawn_event_hub, HubHandles};
-use crate::monitor::{protected_pids, run_monitor_with_threshold, MonitorConfig};
+use crate::monitor::{protected_pids, run_monitor, MonitorConfig};
+use crate::policy::PolicySettings;
 use crate::throttle::ThrottleBackend;
 use tokio::sync::watch;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSettings {
-    pub threshold: f32,
+    pub app_cap: f32,
+    pub pressure_threshold: f32,
+    pub top_offenders: usize,
     pub interval: Duration,
     pub cgroups: bool,
 }
@@ -18,10 +21,20 @@ pub struct CoreRuntime {
 }
 
 pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
-    let backend = ThrottleBackend::from_cli(settings.cgroups);
-    let hub = spawn_event_hub(settings.threshold, backend);
+    let backend = ThrottleBackend::resolve(settings.cgroups);
+    let hub = spawn_event_hub(
+        settings.app_cap,
+        settings.pressure_threshold,
+        backend,
+    );
 
-    let (threshold_watch_tx, threshold_watch_rx) = watch::channel(settings.threshold);
+    let top_offenders = settings.top_offenders;
+    let (policy_watch_tx, policy_watch_rx) = watch::channel(PolicySettings {
+        app_cap: settings.app_cap,
+        pressure_threshold: settings.pressure_threshold,
+        top_offenders,
+    });
+
     {
         let mut state_rx = hub.state_rx.clone();
         tokio::spawn(async move {
@@ -29,8 +42,12 @@ pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
                 if state_rx.changed().await.is_err() {
                     break;
                 }
-                let t = state_rx.borrow().cpu_threshold;
-                let _ = threshold_watch_tx.send(t);
+                let state = state_rx.borrow().clone();
+                let _ = policy_watch_tx.send(PolicySettings {
+                    app_cap: state.app_cap,
+                    pressure_threshold: state.pressure_threshold,
+                    top_offenders,
+                });
             }
         });
     }
@@ -39,11 +56,16 @@ pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
         interval: settings.interval,
         self_pid: std::process::id(),
         protected_pids: protected_pids(),
+        policy: PolicySettings {
+            app_cap: settings.app_cap,
+            pressure_threshold: settings.pressure_threshold,
+            top_offenders: settings.top_offenders,
+        },
     };
 
     let hub_tx_monitor = hub.command_tx.clone();
     tokio::spawn(async move {
-        run_monitor_with_threshold(hub_tx_monitor, threshold_watch_rx, monitor_config).await;
+        run_monitor(hub_tx_monitor, policy_watch_rx, monitor_config).await;
     });
 
     CoreRuntime { hub }

@@ -82,6 +82,8 @@ impl Drop for IpcServerGuard {
 pub enum ClientRequest {
     Ping,
     Subscribe,
+    SetAppCap { value: f32 },
+    #[serde(alias = "set_threshold")]
     SetThreshold { value: f32 },
     Detach,
 }
@@ -175,9 +177,9 @@ async fn handle_client(
                     }
                 }));
             }
-            ClientRequest::SetThreshold { value } => {
-                let clamped = crate::config::clamp_threshold(value);
-                let _ = hub_tx.send(HubCommand::SetThreshold(clamped)).await;
+            ClientRequest::SetAppCap { value } | ClientRequest::SetThreshold { value } => {
+                let clamped = crate::config::clamp_app_cap(value);
+                let _ = hub_tx.send(HubCommand::SetAppCap(clamped)).await;
                 let _ = send_message(&out_tx, ServerMessage::Ok).await;
             }
             ClientRequest::Detach => break,
@@ -207,7 +209,8 @@ impl AttachSession {
         let stream = UnixStream::connect(socket_path()).await?;
         let (read_half, mut write_half) = stream.into_split();
         let (request_tx, mut request_rx) = mpsc::channel::<ClientRequest>(16);
-        let (state_tx, _state_rx) = watch::channel(AppState::new(80.0));
+        let (state_tx, _state_rx) =
+            watch::channel(AppState::new(80.0, crate::config::DEFAULT_PRESSURE_THRESHOLD));
         let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
 
         let writer_task = tokio::spawn(async move {
@@ -268,10 +271,10 @@ impl AttachSession {
         self.state_tx.subscribe()
     }
 
-    pub async fn set_threshold(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn set_app_cap(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
         self.request_tx
-            .send(ClientRequest::SetThreshold {
-                value: crate::config::clamp_threshold(value),
+            .send(ClientRequest::SetAppCap {
+                value: crate::config::clamp_app_cap(value),
             })
             .await?;
         Ok(())
@@ -303,7 +306,7 @@ mod tests {
 
     #[test]
     fn protocol_serde_roundtrip() {
-        let req = ClientRequest::SetThreshold { value: 42.0 };
+        let req = ClientRequest::SetAppCap { value: 42.0 };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: ClientRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, req);
@@ -321,7 +324,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("WRANGLER_RUNTIME_DIR", &dir);
 
-        let hub = spawn_event_hub(70.0, ThrottleBackend::Signal);
+        let hub = spawn_event_hub(70.0, 85.0, ThrottleBackend::Signal);
         let _server = spawn_server(hub.command_tx.clone(), hub.state_rx.clone())
             .await
             .unwrap();
@@ -331,7 +334,7 @@ mod tests {
         let session = AttachSession::connect()
             .await
             .expect("subscribe should succeed");
-        assert_eq!(session.state_rx().borrow().cpu_threshold, 70.0);
+        assert_eq!(session.state_rx().borrow().app_cap, 70.0);
         session.detach().await.unwrap();
 
         std::env::remove_var("WRANGLER_RUNTIME_DIR");

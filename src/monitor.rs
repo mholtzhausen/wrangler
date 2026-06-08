@@ -1,5 +1,8 @@
 use crate::app::ProcessInfo;
 use crate::event::HubCommand;
+use crate::policy::{
+    build_groups, evaluate, group_by_key, PolicySettings, RawProcess, ThrottleDecision,
+};
 use std::collections::HashSet;
 use std::time::Duration;
 use sysinfo::{CpuRefreshKind, ProcessRefreshKind, System};
@@ -11,11 +14,12 @@ pub struct MonitorConfig {
     pub interval: Duration,
     pub self_pid: u32,
     pub protected_pids: HashSet<u32>,
+    pub policy: PolicySettings,
 }
 
-pub async fn run_monitor_with_threshold(
+pub async fn run_monitor(
     hub_tx: Sender<HubCommand>,
-    mut threshold_rx: watch::Receiver<f32>,
+    mut policy_rx: watch::Receiver<PolicySettings>,
     config: MonitorConfig,
 ) {
     let mut sys = System::new_with_specifics(
@@ -24,15 +28,18 @@ pub async fn run_monitor_with_threshold(
             .with_cpu(CpuRefreshKind::everything()),
     );
 
-    let mut governed: HashSet<u32> = HashSet::new();
+    let mut throttled_groups: HashSet<u32> = HashSet::new();
 
     loop {
         sys.refresh_cpu();
         sys.refresh_processes();
 
-        let threshold = *threshold_rx.borrow_and_update();
+        let policy = policy_rx.borrow_and_update().clone();
+        let num_cores = sys.cpus().len().max(1);
+        let global_cpu = global_cpu_usage(&sys);
 
         let mut processes: Vec<ProcessInfo> = Vec::new();
+        let mut raw: Vec<RawProcess> = Vec::new();
         let mut seen_pids: HashSet<u32> = HashSet::new();
 
         for (pid, process) in sys.processes() {
@@ -42,37 +49,22 @@ pub async fn run_monitor_with_threshold(
             }
 
             seen_pids.insert(pid_u32);
+            let parent_pid = process.parent().map(|p| p.as_u32());
             let cpu = process.cpu_usage();
-            processes.push(ProcessInfo {
+            let name = process.name().to_string();
+
+            raw.push(RawProcess {
                 pid: pid_u32,
-                name: process.name().to_string(),
+                parent_pid,
+                name: name.clone(),
                 cpu_usage: cpu,
             });
-
-            if cpu > threshold {
-                if !governed.contains(&pid_u32) {
-                    governed.insert(pid_u32);
-                    let _ = hub_tx
-                        .send(HubCommand::StartThrottle {
-                            pid: pid_u32,
-                            cpu_usage: cpu,
-                        })
-                        .await;
-                }
-            } else if governed.contains(&pid_u32) {
-                governed.remove(&pid_u32);
-                let _ = hub_tx.send(HubCommand::StopThrottle { pid: pid_u32 }).await;
-            }
-        }
-
-        let exited: Vec<u32> = governed
-            .iter()
-            .filter(|p| !seen_pids.contains(p))
-            .copied()
-            .collect();
-        for pid in exited {
-            governed.remove(&pid);
-            let _ = hub_tx.send(HubCommand::StopThrottle { pid }).await;
+            processes.push(ProcessInfo {
+                pid: pid_u32,
+                parent_pid,
+                name,
+                cpu_usage: cpu,
+            });
         }
 
         processes.sort_by(|a, b| {
@@ -81,10 +73,127 @@ pub async fn run_monitor_with_threshold(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let _ = hub_tx.send(HubCommand::ProcessSnapshot(processes)).await;
+        let groups = build_groups(&raw, &config.protected_pids);
+        let decision = evaluate(
+            &groups,
+            global_cpu,
+            num_cores,
+            &policy,
+            &throttled_groups,
+        );
+
+        apply_decision(
+            &hub_tx,
+            &groups,
+            &decision,
+            num_cores,
+            global_cpu,
+            &mut throttled_groups,
+        )
+        .await;
+
+        let exited_groups: Vec<u32> = throttled_groups
+            .iter()
+            .filter(|key| {
+                group_by_key(&groups, **key)
+                    .map(|group| group.pids.iter().all(|pid| !seen_pids.contains(pid)))
+                    .unwrap_or(true)
+            })
+            .copied()
+            .collect();
+        for key in exited_groups {
+            if let Some(group) = group_by_key(&groups, key) {
+                let _ = hub_tx
+                    .send(HubCommand::StopThrottleGroup {
+                        group_key: key,
+                        pids: group.pids.clone(),
+                    })
+                    .await;
+            } else {
+                let _ = hub_tx
+                    .send(HubCommand::StopThrottleGroup {
+                        group_key: key,
+                        pids: Vec::new(),
+                    })
+                    .await;
+            }
+            throttled_groups.remove(&key);
+        }
+
+        let _ = hub_tx
+            .send(HubCommand::ProcessSnapshot {
+                processes,
+                global_cpu,
+                num_cores,
+            })
+            .await;
 
         sleep(config.interval).await;
     }
+}
+
+async fn apply_decision(
+    hub_tx: &Sender<HubCommand>,
+    groups: &[crate::policy::AppGroup],
+    decision: &ThrottleDecision,
+    num_cores: usize,
+    global_cpu: f32,
+    throttled_groups: &mut HashSet<u32>,
+) {
+    for key in &decision.to_stop {
+        if let Some(group) = group_by_key(groups, *key) {
+            let _ = hub_tx
+                .send(HubCommand::StopThrottleGroup {
+                    group_key: *key,
+                    pids: group.pids.clone(),
+                })
+                .await;
+        } else {
+            let _ = hub_tx
+                .send(HubCommand::StopThrottleGroup {
+                    group_key: *key,
+                    pids: Vec::new(),
+                })
+                .await;
+        }
+        throttled_groups.remove(key);
+    }
+
+    for key in &decision.to_start {
+        if let Some(group) = group_by_key(groups, *key) {
+            let _ = hub_tx
+                .send(HubCommand::StartThrottleGroup {
+                    group_key: group.key,
+                    name: group.name.clone(),
+                    pids: group.pids.clone(),
+                    cpu_total: group.cpu_total,
+                    num_cores,
+                    global_cpu,
+                })
+                .await;
+            throttled_groups.insert(*key);
+        }
+    }
+
+    for key in &decision.to_sync {
+        if let Some(group) = group_by_key(groups, *key) {
+            let _ = hub_tx
+                .send(HubCommand::SyncThrottleGroup {
+                    group_key: group.key,
+                    pids: group.pids.clone(),
+                    cpu_total: group.cpu_total,
+                })
+                .await;
+        }
+    }
+}
+
+fn global_cpu_usage(sys: &System) -> f32 {
+    let cpus = sys.cpus();
+    if cpus.is_empty() {
+        return 0.0;
+    }
+    cpus.iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / cpus.len() as f32
 }
 
 pub fn protected_pids() -> HashSet<u32> {

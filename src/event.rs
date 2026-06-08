@@ -1,20 +1,41 @@
-use crate::app::{AppState, ProcessInfo};
+use crate::app::{AppState, ProcessInfo, ThrottledGroupInfo};
+use crate::policy::machine_cpu_budget;
 use crate::throttle::{run_signal_governor, ThrottleBackend};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, watch, Mutex};
 
 pub enum HubCommand {
-    ProcessSnapshot(Vec<ProcessInfo>),
-    StartThrottle { pid: u32, cpu_usage: f32 },
-    StopThrottle { pid: u32 },
-    SetThreshold(f32),
+    ProcessSnapshot {
+        processes: Vec<ProcessInfo>,
+        global_cpu: f32,
+        num_cores: usize,
+    },
+    StartThrottleGroup {
+        group_key: u32,
+        name: String,
+        pids: Vec<u32>,
+        cpu_total: f32,
+        num_cores: usize,
+        global_cpu: f32,
+    },
+    SyncThrottleGroup {
+        group_key: u32,
+        pids: Vec<u32>,
+        cpu_total: f32,
+    },
+    StopThrottleGroup {
+        group_key: u32,
+        pids: Vec<u32>,
+    },
+    SetAppCap(f32),
     Quit,
 }
 
 pub enum ThrottleEvent {
-    Started { pid: u32 },
-    Stopped { pid: u32 },
-    Error { pid: u32, message: String },
+    Started { group_key: u32 },
+    Synced { group_key: u32 },
+    Stopped { group_key: u32 },
+    Error { group_key: u32, message: String },
 }
 
 pub struct HubHandles {
@@ -29,14 +50,22 @@ impl HubHandles {
     }
 }
 
-struct ActiveThrottle {
+struct ActiveGroupThrottle {
     cancel: tokio_util::sync::CancellationToken,
+    pids: Vec<u32>,
 }
 
-pub fn spawn_event_hub(initial_threshold: f32, backend: ThrottleBackend) -> HubHandles {
+pub fn spawn_event_hub(
+    initial_app_cap: f32,
+    initial_pressure_threshold: f32,
+    backend: ThrottleBackend,
+) -> HubHandles {
     let (command_tx, mut command_rx) = mpsc::channel::<HubCommand>(256);
     let (throttle_tx, mut throttle_rx) = mpsc::channel::<ThrottleEvent>(64);
-    let (state_tx, state_rx) = watch::channel(AppState::new(initial_threshold));
+    let (state_tx, state_rx) = watch::channel(AppState::new(
+        initial_app_cap,
+        initial_pressure_threshold,
+    ));
     let (shutdown_tx, _) = watch::channel(false);
     let shutdown_notify = shutdown_tx.clone();
 
@@ -44,8 +73,8 @@ pub fn spawn_event_hub(initial_threshold: f32, backend: ThrottleBackend) -> HubH
     let backend = std::sync::Arc::new(Mutex::new(backend));
 
     tokio::spawn(async move {
-        let mut state = AppState::new(initial_threshold);
-        let mut active: HashMap<u32, ActiveThrottle> = HashMap::new();
+        let mut state = AppState::new(initial_app_cap, initial_pressure_threshold);
+        let mut active: HashMap<u32, ActiveGroupThrottle> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -80,72 +109,188 @@ pub fn spawn_event_hub(initial_threshold: f32, backend: ThrottleBackend) -> HubH
 async fn handle_command(
     cmd: HubCommand,
     state: &mut AppState,
-    active: &mut HashMap<u32, ActiveThrottle>,
+    active: &mut HashMap<u32, ActiveGroupThrottle>,
     state_tx: &watch::Sender<AppState>,
     throttle_tx: &mpsc::Sender<ThrottleEvent>,
     backend: &std::sync::Arc<Mutex<ThrottleBackend>>,
     use_cgroups: bool,
 ) -> bool {
     match cmd {
-        HubCommand::ProcessSnapshot(processes) => {
+        HubCommand::ProcessSnapshot {
+            processes,
+            global_cpu,
+            num_cores,
+        } => {
             state.processes = processes;
+            state.global_cpu = global_cpu;
+            state.num_cores = num_cores;
             broadcast(state_tx, state);
         }
-        HubCommand::StartThrottle { pid, cpu_usage } => {
-            if active.contains_key(&pid) {
+        HubCommand::StartThrottleGroup {
+            group_key,
+            name,
+            pids,
+            cpu_total,
+            num_cores,
+            global_cpu: _,
+        } => {
+            if active.contains_key(&group_key) {
                 return false;
             }
-            let target_pct = state.cpu_threshold;
+
+            let app_cap = state.app_cap;
+            let machine_budget = machine_cpu_budget(app_cap, num_cores);
             let cancel = tokio_util::sync::CancellationToken::new();
             let throttle_events = throttle_tx.clone();
             let backend_clone = backend.clone();
             let cancel_clone = cancel.clone();
+            let pids_for_task = pids.clone();
 
             if use_cgroups {
                 tokio::spawn(async move {
                     let mut guard = backend_clone.lock().await;
                     if let Err(e) = guard
-                        .start_cgroup(pid, cpu_usage, target_pct, cancel_clone)
+                        .start_group_cgroup(
+                            group_key,
+                            &pids_for_task,
+                            app_cap,
+                            num_cores,
+                            cancel_clone,
+                        )
                         .await
                     {
                         let _ = throttle_events
-                            .send(ThrottleEvent::Error { pid, message: e })
+                            .send(ThrottleEvent::Error {
+                                group_key,
+                                message: e,
+                            })
                             .await;
                     }
                 });
             } else {
-                tokio::spawn(async move {
-                    run_signal_governor(pid, cpu_usage, target_pct, cancel_clone).await;
-                });
+                for pid in &pids {
+                    let pid = *pid;
+                    let cancel_pid = cancel.clone();
+                    let backend_clone = backend_clone.clone();
+                    tokio::spawn(async move {
+                        run_signal_governor(pid, cpu_total, machine_budget, cancel_pid).await;
+                        let _ = backend_clone;
+                    });
+                }
             }
 
-            active.insert(pid, ActiveThrottle { cancel });
-            let _ = throttle_tx.send(ThrottleEvent::Started { pid }).await;
+            active.insert(
+                group_key,
+                ActiveGroupThrottle {
+                    cancel,
+                    pids: pids.clone(),
+                },
+            );
+
+            state.throttled_groups.push(ThrottledGroupInfo {
+                group_key,
+                name,
+                pids,
+                cpu_total,
+            });
+            state.sync_throttled_pids();
+            let _ = throttle_tx
+                .send(ThrottleEvent::Started { group_key })
+                .await;
+            broadcast(state_tx, state);
         }
-        HubCommand::StopThrottle { pid } => {
-            stop_pid(pid, active, throttle_tx, backend, use_cgroups).await;
+        HubCommand::SyncThrottleGroup {
+            group_key,
+            pids,
+            cpu_total,
+        } => {
+            let Some(entry) = active.get_mut(&group_key) else {
+                return false;
+            };
+
+            if use_cgroups {
+                let backend_clone = backend.clone();
+                let pids_clone = pids.clone();
+                let throttle_events = throttle_tx.clone();
+                tokio::spawn(async move {
+                    let mut guard = backend_clone.lock().await;
+                    if let Err(e) = guard.sync_group_cgroup(group_key, &pids_clone).await {
+                        let _ = throttle_events
+                            .send(ThrottleEvent::Error {
+                                group_key,
+                                message: e,
+                            })
+                            .await;
+                    }
+                });
+            } else {
+                let machine_budget =
+                    machine_cpu_budget(state.app_cap, state.num_cores);
+                for pid in pids
+                    .iter()
+                    .filter(|pid| !entry.pids.contains(pid))
+                    .copied()
+                {
+                    let cancel = entry.cancel.clone();
+                    tokio::spawn(async move {
+                        run_signal_governor(pid, cpu_total, machine_budget, cancel).await;
+                    });
+                }
+            }
+
+            entry.pids = pids.clone();
+            if let Some(group) = state
+                .throttled_groups
+                .iter_mut()
+                .find(|group| group.group_key == group_key)
+            {
+                group.pids = pids;
+                group.cpu_total = cpu_total;
+            }
+            state.sync_throttled_pids();
+            let _ = throttle_tx
+                .send(ThrottleEvent::Synced { group_key })
+                .await;
+            broadcast(state_tx, state);
         }
-        HubCommand::SetThreshold(threshold) => {
-            state.cpu_threshold = crate::config::clamp_threshold(threshold);
-            let _ = crate::config::Config::update_threshold(state.cpu_threshold);
+        HubCommand::StopThrottleGroup { group_key, pids } => {
+            stop_group(
+                group_key,
+                &pids,
+                active,
+                throttle_tx,
+                backend,
+                use_cgroups,
+            )
+            .await;
+            state
+                .throttled_groups
+                .retain(|group| group.group_key != group_key);
+            state.sync_throttled_pids();
+            broadcast(state_tx, state);
+        }
+        HubCommand::SetAppCap(app_cap) => {
+            state.app_cap = crate::config::clamp_app_cap(app_cap);
+            let _ = crate::config::Config::update_app_cap(state.app_cap);
             broadcast(state_tx, state);
         }
         HubCommand::Quit => {
             state.quitting = true;
             broadcast(state_tx, state);
-            let pids: Vec<u32> = active.keys().copied().collect();
-            for pid in &pids {
-                if let Some(entry) = active.remove(pid) {
+            let groups: Vec<(u32, Vec<u32>)> = active
+                .iter()
+                .map(|(key, entry)| (*key, entry.pids.clone()))
+                .collect();
+            for (group_key, pids) in groups {
+                if let Some(entry) = active.remove(&group_key) {
                     entry.cancel.cancel();
                 }
+                let mut guard = backend.lock().await;
+                guard.stop_group(group_key, &pids).await;
             }
             if use_cgroups {
                 let mut guard = backend.lock().await;
                 guard.stop_all().await;
-            } else {
-                for pid in pids {
-                    crate::throttle::resume_signal(pid);
-                }
             }
             return true;
         }
@@ -153,46 +298,59 @@ async fn handle_command(
     false
 }
 
-async fn stop_pid(
-    pid: u32,
-    active: &mut HashMap<u32, ActiveThrottle>,
+async fn stop_group(
+    group_key: u32,
+    pids: &[u32],
+    active: &mut HashMap<u32, ActiveGroupThrottle>,
     throttle_tx: &mpsc::Sender<ThrottleEvent>,
     backend: &std::sync::Arc<Mutex<ThrottleBackend>>,
     use_cgroups: bool,
 ) {
-    if let Some(entry) = active.remove(&pid) {
+    if let Some(entry) = active.remove(&group_key) {
         entry.cancel.cancel();
-        if use_cgroups {
-            let mut guard = backend.lock().await;
-            guard.stop_pid(pid).await;
+        let stop_pids = if pids.is_empty() {
+            entry.pids
         } else {
-            crate::throttle::resume_signal(pid);
+            pids.to_vec()
+        };
+        let mut guard = backend.lock().await;
+        guard.stop_group(group_key, &stop_pids).await;
+        if !use_cgroups {
+            drop(guard);
         }
-        let _ = throttle_tx.send(ThrottleEvent::Stopped { pid }).await;
+        let _ = throttle_tx
+            .send(ThrottleEvent::Stopped { group_key })
+            .await;
     }
 }
 
 fn handle_throttle_event(
     event: ThrottleEvent,
     state: &mut AppState,
-    active: &mut HashMap<u32, ActiveThrottle>,
+    active: &mut HashMap<u32, ActiveGroupThrottle>,
     state_tx: &watch::Sender<AppState>,
 ) {
     match event {
-        ThrottleEvent::Started { pid } => {
-            state.throttled_pids.insert(pid);
-            state.push_log(pid, "throttle started");
+        ThrottleEvent::Started { group_key } => {
+            state.push_log(group_key, "group throttle started");
             broadcast(state_tx, state);
         }
-        ThrottleEvent::Stopped { pid } => {
-            state.throttled_pids.remove(&pid);
-            state.push_log(pid, "throttle stopped");
+        ThrottleEvent::Synced { group_key } => {
+            state.push_log(group_key, "group membership synced");
             broadcast(state_tx, state);
         }
-        ThrottleEvent::Error { pid, message } => {
-            state.last_error = Some(format!("PID {pid}: {message}"));
-            state.push_log(pid, format!("error: {message}"));
-            active.remove(&pid);
+        ThrottleEvent::Stopped { group_key } => {
+            state.push_log(group_key, "group throttle stopped");
+            broadcast(state_tx, state);
+        }
+        ThrottleEvent::Error { group_key, message } => {
+            state.last_error = Some(format!("group {group_key}: {message}"));
+            state.push_log(group_key, format!("error: {message}"));
+            active.remove(&group_key);
+            state
+                .throttled_groups
+                .retain(|group| group.group_key != group_key);
+            state.sync_throttled_pids();
             broadcast(state_tx, state);
         }
     }

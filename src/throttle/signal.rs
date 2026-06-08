@@ -9,9 +9,14 @@ const SLICE_MS: u64 = 40;
 pub struct SignalThrottle;
 
 impl SignalThrottle {
-    pub async fn run_governor(pid: u32, cpu_usage: f32, threshold: f32, cancel: CancellationToken) {
+    pub async fn run_governor(
+        pid: u32,
+        cpu_total: f32,
+        machine_budget: f32,
+        cancel: CancellationToken,
+    ) {
         let nix_pid = Pid::from_raw(pid as i32);
-        let stop_fraction = compute_stop_fraction(cpu_usage, threshold);
+        let stop_fraction = compute_stop_fraction(cpu_total, machine_budget);
 
         loop {
             if cancel.is_cancelled() {
@@ -55,14 +60,24 @@ impl SignalThrottle {
     }
 }
 
-fn compute_stop_fraction(cpu_usage: f32, threshold: f32) -> f32 {
-    if cpu_usage <= threshold {
+fn compute_stop_fraction(cpu_total: f32, machine_budget: f32) -> f32 {
+    if cpu_total <= machine_budget {
         return 0.5;
     }
-    let excess = (cpu_usage - threshold) / cpu_usage;
+    let excess = (cpu_total - machine_budget) / cpu_total;
     excess.clamp(0.1, 0.9)
 }
 
 fn process_exists(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_fraction_increases_with_excess_cpu() {
+        assert!(compute_stop_fraction(400.0, 320.0) > compute_stop_fraction(330.0, 320.0));
+    }
 }

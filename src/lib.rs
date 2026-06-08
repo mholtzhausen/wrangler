@@ -7,6 +7,7 @@ pub mod event;
 pub mod instance;
 pub mod ipc;
 pub mod monitor;
+pub mod policy;
 pub mod runtime;
 pub mod throttle;
 pub mod ui;
@@ -87,8 +88,8 @@ async fn run_standalone_tui(core: runtime::CoreRuntime) -> Result<(), Box<dyn st
     tokio::spawn(async move {
         while let Some(action) = ui_action_rx.recv().await {
             match action {
-                UiAction::SetThreshold(t) => {
-                    let _ = hub_for_ui.send(HubCommand::SetThreshold(t)).await;
+                UiAction::SetAppCap(t) => {
+                    let _ = hub_for_ui.send(HubCommand::SetAppCap(t)).await;
                 }
                 UiAction::Quit => {
                     let _ = hub_for_ui.send(HubCommand::Quit).await;
@@ -129,8 +130,8 @@ async fn run_attach_tui() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             };
             match action {
-                UiAction::SetThreshold(t) => {
-                    let _ = active.set_threshold(t).await;
+                UiAction::SetAppCap(t) => {
+                    let _ = active.set_app_cap(t).await;
                 }
                 UiAction::Quit => break,
             }

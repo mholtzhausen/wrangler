@@ -33,8 +33,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> starting daemon (threshold 25%, interval 500ms)"
-"$BIN" --daemon --no-tray --foreground --threshold 25 --interval 500 &
+echo "==> starting daemon (app cap 25%, pressure 50%, interval 500ms)"
+"$BIN" --daemon --no-tray --foreground --app-cap 25 --pressure-threshold 50 --interval 500 &
 DAEMON_PID=$!
 
 echo "==> waiting for daemon IPC"
@@ -51,8 +51,8 @@ if [[ "$ready" -ne 1 ]]; then
     exit 1
 fi
 
-echo "==> starting CPU hog (stress-ng)"
-stress-ng --cpu 1 --timeout 30s >/dev/null 2>&1 &
+echo "==> starting CPU hog (stress-ng, all CPUs)"
+stress-ng --cpu 0 --timeout 30s >/dev/null 2>&1 &
 HOG_PID=$!
 
 echo "==> polling for throttled processes"

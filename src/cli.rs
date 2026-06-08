@@ -9,15 +9,19 @@ use crate::runtime::RuntimeSettings;
 #[derive(Debug, Parser)]
 #[command(name = "wrangler", about = "Process monitor and CPU throttle TUI")]
 pub struct Cli {
-    /// CPU usage threshold (%) above which processes are throttled
+    /// Max % of machine CPU per app group (throttled when system is under pressure)
+    #[arg(long, visible_alias = "threshold")]
+    pub app_cap: Option<f32>,
+
+    /// Global CPU % above which throttling may engage (0 = always evaluate)
     #[arg(long)]
-    pub threshold: Option<f32>,
+    pub pressure_threshold: Option<f32>,
 
     /// Monitor polling interval in milliseconds
     #[arg(long)]
     pub interval: Option<u64>,
 
-    /// Use cgroups v2 cpu.max instead of SIGSTOP/SIGCONT (requires root)
+    /// Request cgroups v2 cpu.max (only effective when running as root)
     #[arg(long)]
     pub cgroups: bool,
 
@@ -49,10 +53,15 @@ impl Cli {
 
     pub fn resolve_with(&self, file: &Config) -> RuntimeSettings {
         RuntimeSettings {
-            threshold: self
-                .threshold
-                .map(crate::config::clamp_threshold)
-                .unwrap_or(file.threshold),
+            app_cap: self
+                .app_cap
+                .map(crate::config::clamp_app_cap)
+                .unwrap_or(file.app_cap),
+            pressure_threshold: self
+                .pressure_threshold
+                .map(crate::config::clamp_pressure_threshold)
+                .unwrap_or(file.pressure_threshold),
+            top_offenders: file.top_offenders,
             interval: Duration::from_millis(self.interval.unwrap_or(file.interval_ms)),
             cgroups: self.cgroups || file.use_cgroups,
         }
@@ -82,12 +91,15 @@ mod tests {
     #[test]
     fn cli_overrides_config_file() {
         let file = Config {
-            threshold: 60.0,
+            app_cap: 60.0,
+            pressure_threshold: 85.0,
+            top_offenders: 1,
             interval_ms: 2000,
             use_cgroups: false,
         };
         let cli = Cli {
-            threshold: Some(45.0),
+            app_cap: Some(45.0),
+            pressure_threshold: None,
             interval: Some(750),
             cgroups: false,
             daemon: false,
@@ -97,19 +109,22 @@ mod tests {
             status: false,
         };
         let settings = cli.resolve_with(&file);
-        assert_eq!(settings.threshold, 45.0);
+        assert_eq!(settings.app_cap, 45.0);
         assert_eq!(settings.interval.as_millis(), 750);
     }
 
     #[test]
     fn config_used_when_cli_omits_flags() {
         let file = Config {
-            threshold: 60.0,
+            app_cap: 60.0,
+            pressure_threshold: 85.0,
+            top_offenders: 1,
             interval_ms: 2000,
             use_cgroups: false,
         };
         let cli = Cli {
-            threshold: None,
+            app_cap: None,
+            pressure_threshold: None,
             interval: None,
             cgroups: false,
             daemon: false,
@@ -119,7 +134,7 @@ mod tests {
             status: false,
         };
         let settings = cli.resolve_with(&file);
-        assert_eq!(settings.threshold, 60.0);
+        assert_eq!(settings.app_cap, 60.0);
         assert_eq!(settings.interval.as_millis(), 2000);
     }
 
@@ -135,5 +150,11 @@ mod tests {
     fn foreground_prevents_detach() {
         let cli = Cli::try_parse_from(["wrangler", "--tray", "--foreground"]).unwrap();
         assert!(!cli.should_detach_from_terminal());
+    }
+
+    #[test]
+    fn threshold_alias_maps_to_app_cap() {
+        let cli = Cli::try_parse_from(["wrangler", "--threshold", "55"]).unwrap();
+        assert_eq!(cli.app_cap, Some(55.0));
     }
 }

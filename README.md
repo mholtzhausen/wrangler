@@ -1,12 +1,14 @@
 # Wrangler
 
-Process monitor and CPU throttle utility for Ubuntu/Linux. Wrangler watches system processes, throttles CPU hogs that exceed a configurable threshold, and provides a Ratatui dashboard for live inspection.
+Process monitor and CPU throttle utility for Ubuntu/Linux. Wrangler groups processes by app, and when the system is under pressure caps the hottest offender so one runaway app cannot starve the machine.
 
 ## Features
 
 - Real-time process list sorted by CPU usage
+- App-group CPU budgets as a % of the whole machine (not per-core)
+- Pressure gate: throttling only engages when global CPU is high
 - SIGSTOP/SIGCONT duty-cycle throttling (default, no root required)
-- Optional cgroups v2 `cpu.max` throttling (`--cgroups`, requires root)
+- cgroups v2 `cpu.max` per app group when running as root
 - Background daemon with system tray (Linux)
 - Attachable dashboard that shares state with the daemon
 - Persistent settings in `~/.config/wrangler/config.toml`
@@ -35,7 +37,7 @@ cargo run
 make run
 ```
 
-Keys: **Up/Down** adjust threshold, **q/Esc** quit.
+Keys: **+/-** adjust app cap, **Up/Down** scroll, **q/Esc** quit.
 
 ### Background daemon + tray
 
@@ -72,12 +74,16 @@ If a daemon is already running, launching `wrangler` without flags automatically
 Settings are stored at `~/.config/wrangler/config.toml`:
 
 ```toml
-threshold = 80.0
+app_cap = 40.0              # max % of machine CPU per app group
+pressure_threshold = 85.0   # global CPU % before throttling may engage (0 = always)
+top_offenders = 1           # how many hottest groups to consider
 interval_ms = 1000
 use_cgroups = false
 ```
 
-CLI flags override the file for that invocation. Threshold changes from the dashboard are saved automatically.
+The legacy `threshold` key is still accepted on load and maps to `app_cap`.
+
+CLI flags override the file for that invocation. App cap changes from the dashboard are saved automatically.
 
 ## Systemd user service
 
@@ -92,9 +98,10 @@ Unit file: `contrib/systemd/user/wrangler.service`
 
 | Flag | Description |
 |------|-------------|
-| `--threshold` | CPU % threshold (default: from config or 80) |
+| `--app-cap`, `--threshold` | Max % of machine CPU per app group (default: 40) |
+| `--pressure-threshold` | Global CPU % before throttling may engage (default: 85) |
 | `--interval` | Poll interval in ms (default: from config or 1000) |
-| `--cgroups` | Use cgroups v2 instead of signals |
+| `--cgroups` | Request cgroups v2 (effective when running as root) |
 | `--daemon`, `--tray` | Run monitor/throttle in background (detaches from terminal) |
 | `--foreground` | Keep daemon attached (systemd, debugging) |
 | `--no-tray` | Daemon without system tray |
@@ -104,7 +111,7 @@ Unit file: `contrib/systemd/user/wrangler.service`
 ## Permissions
 
 - **Signal throttling** works on processes owned by your user. Root-owned processes require matching privileges.
-- **cgroups v2** requires root. Example: `sudo wrangler --daemon --cgroups`
+- **cgroups v2** is used automatically when running as root. Example: `sudo wrangler --tray`
 - Do not use `setcap cap_sys_ptrace` on the binary; prefer matching UID or cgroups as root.
 
 ## Testing
@@ -122,7 +129,7 @@ CI runs on every push/PR to `main` via [`.github/workflows/ci.yml`](.github/work
 Query a running daemon:
 
 ```bash
-wrangler --status   # JSON snapshot of processes, threshold, throttled PIDs
+wrangler --status   # JSON snapshot of processes, app cap, throttled groups
 ```
 
 ## Architecture
@@ -134,7 +141,7 @@ Monitor (sysinfo) ──► Event Hub ◄── TUI / IPC clients
                     (signals or cgroups)
 ```
 
-The daemon exposes a Unix socket at `$XDG_RUNTIME_DIR/wrangler.sock` for dashboard attach and threshold sync.
+The daemon exposes a Unix socket at `$XDG_RUNTIME_DIR/wrangler.sock` for dashboard attach and app cap sync.
 
 ## License
 
