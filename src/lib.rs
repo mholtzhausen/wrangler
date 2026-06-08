@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod monitor;
 pub mod policy;
 pub mod runtime;
+pub mod session_env;
 pub mod throttle;
 pub mod ui;
 
@@ -35,6 +36,7 @@ use ui::{run_ui, UiAction, UiConfig};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+    session_env::restore_invoking_user_session();
 
     let cli = Cli::parse();
 

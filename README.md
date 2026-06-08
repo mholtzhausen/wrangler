@@ -117,6 +117,7 @@ Unit file: `contrib/systemd/user/wrangler.service`
 
 - **Signal throttling** works on processes owned by your user. Root-owned processes require matching privileges.
 - **cgroups v2** is used automatically when running as root. Example: `sudo wrangler --tray`
+- When started with `sudo`, wrangler reattaches to your user session bus so the tray icon and daemon socket stay in your desktop session (`/run/user/<uid>`). If the tray is still missing, run `sudo wrangler --tray --foreground` once and check logs for tray errors.
 - Do not use `setcap cap_sys_ptrace` on the binary; prefer matching UID or cgroups as root.
 
 ## Testing

@@ -75,7 +75,15 @@ async fn spawn_tray_context() -> TrayContext {
             }
         }
         Err(e) => {
-            tracing::warn!(error = %e, "system tray unavailable; continuing headless");
+            let hint = if nix::unistd::geteuid().is_root() {
+                " (when using sudo, ensure you launched from a logged-in desktop session)"
+            } else {
+                ""
+            };
+            tracing::warn!(
+                error = %e,
+                "system tray unavailable; continuing headless{hint}"
+            );
             TrayContext::disabled()
         }
     }
