@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1 (4fb84ab)
+## 1.0.1 (b3af944)
 
 ### Bugfixes
 
