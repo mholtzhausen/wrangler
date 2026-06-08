@@ -53,7 +53,7 @@ pub async fn run_ui(
 ) -> io::Result<()> {
     let mut state = state_rx.borrow_and_update().clone();
     let mut table_state = TableState::default();
-    let mut view_mode = ViewMode::Flat;
+    let mut view_mode = ViewMode::Grouped;
     let mut expanded_groups = HashSet::new();
 
     loop {
@@ -302,7 +302,27 @@ fn build_display_rows<'a>(
     }
 }
 
-fn row_to_cells<'a>(row: &'a DisplayRow<'a>) -> Row<'a> {
+/// htop-style CPU (100% = one core) as a share of total machine capacity (0–100%).
+fn machine_cpu_share(per_core_percent: f32, num_cores: usize) -> f32 {
+    per_core_percent / num_cores.max(1) as f32
+}
+
+fn selection_style(base: Style, selected: bool) -> Style {
+    if selected {
+        base.bg(Color::Indexed(236))
+    } else {
+        base
+    }
+}
+
+fn row_to_cells<'a>(
+    row: &'a DisplayRow<'a>,
+    row_index: usize,
+    selected_index: usize,
+    view_mode: ViewMode,
+    num_cores: usize,
+) -> Row<'a> {
+    let selected = row_index == selected_index;
     match row {
         DisplayRow::GroupHeader {
             group,
@@ -317,6 +337,10 @@ fn row_to_cells<'a>(row: &'a DisplayRow<'a>) -> Row<'a> {
             } else {
                 style = style.fg(Color::Cyan);
             }
+            let cpu = match view_mode {
+                ViewMode::Grouped => machine_cpu_share(group.cpu_total, num_cores),
+                ViewMode::Flat => group.cpu_total,
+            };
             Row::new(vec![
                 Cell::from(format!("{marker}{arrow} {}", group.group_key)),
                 Cell::from(format!(
@@ -324,9 +348,9 @@ fn row_to_cells<'a>(row: &'a DisplayRow<'a>) -> Row<'a> {
                     group.name,
                     group.pids.len()
                 )),
-                Cell::from(format!("{:.1}%", group.cpu_total)),
+                Cell::from(format!("{cpu:.1}%")),
             ])
-            .style(style)
+            .style(selection_style(style, selected))
         }
         DisplayRow::Process {
             process,
@@ -338,12 +362,17 @@ fn row_to_cells<'a>(row: &'a DisplayRow<'a>) -> Row<'a> {
                 style = style.fg(Color::Red).add_modifier(Modifier::BOLD);
             }
             let prefix = if *indented { "  └ " } else { "" };
+            let cpu = if view_mode == ViewMode::Grouped && *indented {
+                machine_cpu_share(process.cpu_usage, num_cores)
+            } else {
+                process.cpu_usage
+            };
             Row::new(vec![
                 Cell::from(format!("{prefix}{}", process.pid)),
                 Cell::from(process.name.as_str()),
-                Cell::from(format!("{:.1}%", process.cpu_usage)),
+                Cell::from(format!("{cpu:.1}%")),
             ])
-            .style(style)
+            .style(selection_style(style, selected))
         }
     }
 }
@@ -446,12 +475,29 @@ fn draw_ui(
         )
     };
 
-    let rows: Vec<Row> = display_rows.iter().map(row_to_cells).collect();
+    let selected_index = table_state.offset();
+    let rows: Vec<Row> = display_rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            row_to_cells(
+                row,
+                index,
+                selected_index,
+                view_mode,
+                state.num_cores,
+            )
+        })
+        .collect();
 
+    let cpu_header = match view_mode {
+        ViewMode::Grouped => "Machine %",
+        ViewMode::Flat => "CPU %",
+    };
     let header_row = Row::new(vec![
         Cell::from("PID/Key").style(Style::default().add_modifier(Modifier::BOLD)),
         Cell::from("Process / Group").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("CPU").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from(cpu_header).style(Style::default().add_modifier(Modifier::BOLD)),
     ]);
 
     let table = Table::new(
