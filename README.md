@@ -13,6 +13,22 @@ Process monitor and CPU throttle utility for Ubuntu/Linux. Wrangler groups proce
 - Attachable dashboard that shares state with the daemon
 - Persistent settings in `~/.config/wrangler/config.toml`
 
+## Install
+
+One-line install from the latest [GitHub release](https://github.com/mholtzhausen/wrangler/releases/latest) (downloads the binary and runs `wrangler install --sudo`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
+```
+
+Pin a specific version:
+
+```bash
+WRANGLER_VERSION=1.0.0 curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
+```
+
+The script is also in the repo: [`scripts/install.sh`](scripts/install.sh).
+
 ## Requirements
 
 - Linux (Ubuntu tested)
@@ -25,13 +41,7 @@ Process monitor and CPU throttle utility for Ubuntu/Linux. Wrangler groups proce
 ```bash
 make release
 # binary: target/release/wrangler
-```
-
-Install the binary system-wide:
-
-```bash
-wrangler install --sudo
-wrangler uninstall --sudo
+wrangler install --sudo   # install local build to /usr/local/bin
 ```
 
 ## Quick start

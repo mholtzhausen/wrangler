@@ -3,7 +3,10 @@ BINARY := wrangler
 TARGET_DEBUG := target/debug/$(BINARY)
 TARGET_RELEASE := target/release/$(BINARY)
 
-.PHONY: all build release run run-release run-daemon run-daemon-release test check clippy fmt fmt-check ci e2e e2e-multiproc e2e-cgroup clean install install-systemd help
+VERSION := $(shell grep '^version' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+RELEASE_TARBALL := dist/wrangler-$(VERSION)-linux-x86_64.tar.gz
+
+.PHONY: all build release release-dist run run-release run-daemon run-daemon-release test check clippy fmt fmt-check ci e2e e2e-multiproc e2e-cgroup clean install install-systemd help
 
 all: build
 
@@ -12,6 +15,11 @@ build:
 
 release:
 	$(CARGO) build --release
+
+release-dist: release
+	mkdir -p dist
+	tar czf $(RELEASE_TARBALL) -C target/release wrangler
+	@echo "Built $(RELEASE_TARBALL)"
 
 run: build
 	$(CARGO) run
@@ -66,12 +74,14 @@ help:
 	@echo "Targets:"
 	@echo "  make build        Build debug binary ($(TARGET_DEBUG))"
 	@echo "  make release      Build optimized binary ($(TARGET_RELEASE))"
+	@echo "  make release-dist Build $(RELEASE_TARBALL)"
 	@echo "  make run          Build and run via cargo"
 	@echo "  make run-release  Run release binary directly"
 	@echo "  make run-daemon   Run background daemon with system tray"
 	@echo "  make run-daemon-release  Run release daemon"
 	@echo "  make install-systemd     Install user systemd unit"
-	@echo "  wrangler install --sudo           Install binary to /usr/local/bin"
+	@echo "  curl -fsSL .../scripts/install.sh | bash   Install latest release"
+	@echo "  wrangler install --sudo           Install local build to /usr/local/bin"
 	@echo "  wrangler service install          Install user systemd unit (tray)"
 	@echo "  wrangler service install --sudo   Install system systemd unit (cgroups + tray)"
 	@echo "  make test         Run tests"
