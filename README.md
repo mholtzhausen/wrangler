@@ -95,6 +95,7 @@ Unit file: `contrib/systemd/user/wrangler.service`
 | `--daemon` | Run monitor/throttle in background |
 | `--no-tray` | Daemon without system tray |
 | `--attach` | Connect TUI to running daemon |
+| `--status` | Print daemon state as JSON and exit |
 
 ## Permissions
 
@@ -105,8 +106,19 @@ Unit file: `contrib/systemd/user/wrangler.service`
 ## Testing
 
 ```bash
-make test
-make clippy
+make test       # unit tests
+make ci         # fmt-check + clippy + test (same as CI check job)
+make e2e        # end-to-end throttle smoke test (requires stress-ng)
+```
+
+CI runs on every push/PR to `main` via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+- **check** — `cargo fmt --check`, `clippy`, unit tests
+- **e2e** — headless daemon + `stress-ng` CPU hog; verifies throttling via `wrangler --status`
+
+Query a running daemon:
+
+```bash
+wrangler --status   # JSON snapshot of processes, threshold, throttled PIDs
 ```
 
 ## Architecture

@@ -30,6 +30,10 @@ pub struct Cli {
     /// Attach TUI to a running daemon (used by the tray dashboard launcher)
     #[arg(long)]
     pub attach: bool,
+
+    /// Print daemon state as JSON and exit (requires a running daemon)
+    #[arg(long)]
+    pub status: bool,
 }
 
 impl Cli {
@@ -71,6 +75,7 @@ mod tests {
             daemon: false,
             no_tray: false,
             attach: false,
+            status: false,
         };
         let settings = cli.resolve_with(&file);
         assert_eq!(settings.threshold, 45.0);
@@ -91,6 +96,7 @@ mod tests {
             daemon: false,
             no_tray: false,
             attach: false,
+            status: false,
         };
         let settings = cli.resolve_with(&file);
         assert_eq!(settings.threshold, 60.0);

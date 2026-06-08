@@ -9,12 +9,7 @@ const SLICE_MS: u64 = 40;
 pub struct SignalThrottle;
 
 impl SignalThrottle {
-    pub async fn run_governor(
-        pid: u32,
-        cpu_usage: f32,
-        threshold: f32,
-        cancel: CancellationToken,
-    ) {
+    pub async fn run_governor(pid: u32, cpu_usage: f32, threshold: f32, cancel: CancellationToken) {
         let nix_pid = Pid::from_raw(pid as i32);
         let stop_fraction = compute_stop_fraction(cpu_usage, threshold);
 

@@ -171,10 +171,7 @@ pub async fn run_from_cli(
     settings: RuntimeSettings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let core = crate::runtime::spawn_core(&settings);
-    let _ipc = crate::ipc::spawn_server(
-        core.hub.command_tx.clone(),
-        core.hub.state_rx.clone(),
-    )
-    .await?;
+    let _ipc =
+        crate::ipc::spawn_server(core.hub.command_tx.clone(), core.hub.state_rx.clone()).await?;
     run(core, cli).await
 }

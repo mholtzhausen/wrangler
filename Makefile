@@ -3,7 +3,7 @@ BINARY := wrangler
 TARGET_DEBUG := target/debug/$(BINARY)
 TARGET_RELEASE := target/release/$(BINARY)
 
-.PHONY: all build release run run-release run-daemon run-daemon-release test check clippy fmt clean install install-systemd help
+.PHONY: all build release run run-release run-daemon run-daemon-release test check clippy fmt fmt-check ci e2e clean install install-systemd help
 
 all: build
 
@@ -37,6 +37,14 @@ clippy:
 fmt:
 	$(CARGO) fmt --all
 
+fmt-check:
+	$(CARGO) fmt --all -- --check
+
+ci: fmt-check clippy test
+
+e2e:
+	bash scripts/e2e-smoke.sh
+
 clean:
 	$(CARGO) clean
 
@@ -62,6 +70,8 @@ help:
 	@echo "  make run-daemon-release  Run release daemon"
 	@echo "  make install-systemd     Install user systemd unit"
 	@echo "  make test         Run tests"
+	@echo "  make ci           Run fmt-check, clippy, and test (matches CI check job)"
+	@echo "  make e2e          Run end-to-end throttle smoke test (needs stress-ng)"
 	@echo "  make check        Type-check without producing binaries"
 	@echo "  make clippy       Lint with clippy (-D warnings)"
 	@echo "  make fmt          Format source with rustfmt"

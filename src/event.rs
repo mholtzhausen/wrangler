@@ -33,10 +33,7 @@ struct ActiveThrottle {
     cancel: tokio_util::sync::CancellationToken,
 }
 
-pub fn spawn_event_hub(
-    initial_threshold: f32,
-    backend: ThrottleBackend,
-) -> HubHandles {
+pub fn spawn_event_hub(initial_threshold: f32, backend: ThrottleBackend) -> HubHandles {
     let (command_tx, mut command_rx) = mpsc::channel::<HubCommand>(256);
     let (throttle_tx, mut throttle_rx) = mpsc::channel::<ThrottleEvent>(64);
     let (state_tx, state_rx) = watch::channel(AppState::new(initial_threshold));

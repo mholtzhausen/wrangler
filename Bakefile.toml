@@ -1,0 +1,53 @@
+[tasks.release]
+command = "make release"
+
+[tasks.help]
+command = "make help"
+
+[tasks.run-release]
+command = "make run-release"
+
+[tasks.clean]
+command = "make clean"
+
+[tasks.install]
+command = "make install"
+
+[tasks.clippy]
+command = "make clippy"
+
+[tasks.all]
+command = "make all"
+
+[tasks.build]
+command = "make build"
+
+[tasks.check]
+command = "make check"
+
+[tasks.test]
+command = "make test"
+
+[tasks.fmt]
+command = "make fmt"
+
+[tasks.fmt-check]
+command = "make fmt-check"
+
+[tasks.ci]
+command = "make ci"
+
+[tasks.e2e]
+command = "make e2e"
+
+[tasks.run]
+command = "make run"
+
+[tasks.run-daemon]
+command = "make run-daemon"
+
+[tasks.run-daemon-release]
+command = "make run-daemon-release"
+
+[tasks.install-systemd]
+command = "make install-systemd"

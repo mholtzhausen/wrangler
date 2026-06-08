@@ -105,9 +105,12 @@ pub async fn ping() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    tokio::time::timeout(std::time::Duration::from_secs(1), reader.read_line(&mut line))
-        .await
-        .map_err(|_| "daemon ping timed out")??;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        reader.read_line(&mut line),
+    )
+    .await
+    .map_err(|_| "daemon ping timed out")??;
 
     match serde_json::from_str::<ServerMessage>(line.trim())? {
         ServerMessage::Ok => Ok(()),
@@ -153,11 +156,7 @@ async fn handle_client(
                     continue;
                 }
                 let snapshot = state_rx.borrow().clone();
-                let _ = send_message(
-                    &out_tx,
-                    ServerMessage::State { data: snapshot },
-                )
-                .await;
+                let _ = send_message(&out_tx, ServerMessage::State { data: snapshot }).await;
 
                 let mut rx = state_rx.clone();
                 let tx = out_tx.clone();
@@ -192,10 +191,7 @@ async fn handle_client(
     Ok(())
 }
 
-async fn send_message(
-    tx: &mpsc::Sender<ServerMessage>,
-    msg: ServerMessage,
-) -> Result<(), ()> {
+async fn send_message(tx: &mpsc::Sender<ServerMessage>, msg: ServerMessage) -> Result<(), ()> {
     tx.send(msg).await.map_err(|_| ())
 }
 
@@ -332,7 +328,9 @@ mod tests {
 
         ping().await.expect("ping should succeed");
 
-        let session = AttachSession::connect().await.expect("subscribe should succeed");
+        let session = AttachSession::connect()
+            .await
+            .expect("subscribe should succeed");
         assert_eq!(session.state_rx().borrow().cpu_threshold, 70.0);
         session.detach().await.unwrap();
 

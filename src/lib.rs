@@ -28,13 +28,18 @@ use ratatui::Terminal;
 use runtime::spawn_core;
 use std::io;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use ui::{run_ui, UiAction, UiConfig};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
+
+    if cli.status {
+        return print_daemon_status().await;
+    }
+
     let settings = cli.resolve();
 
     if cli.daemon {
@@ -57,6 +62,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     config::Config::from_settings(&settings).save()?;
     let core = spawn_core(&settings);
     run_standalone_tui(core).await
+}
+
+async fn print_daemon_status() -> Result<(), Box<dyn std::error::Error>> {
+    let session = AttachSession::connect()
+        .await
+        .map_err(|e| format!("failed to connect to wrangler daemon: {e}"))?;
+    let state = session.state_rx().borrow().clone();
+    println!("{}", serde_json::to_string_pretty(&state)?);
+    session.detach().await?;
+    Ok(())
 }
 
 async fn run_standalone_tui(core: runtime::CoreRuntime) -> Result<(), Box<dyn std::error::Error>> {

@@ -124,11 +124,7 @@ fn draw_ui(f: &mut ratatui::Frame, state: &AppState, config: &UiConfig) {
     );
     f.render_widget(list, chunks[1]);
 
-    let throttled: Vec<String> = state
-        .throttled_pids
-        .iter()
-        .map(|p| p.to_string())
-        .collect();
+    let throttled: Vec<String> = state.throttled_pids.iter().map(|p| p.to_string()).collect();
     let recent_log: Vec<String> = state
         .throttle_log
         .iter()

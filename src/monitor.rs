@@ -61,9 +61,7 @@ pub async fn run_monitor_with_threshold(
                 }
             } else if governed.contains(&pid_u32) {
                 governed.remove(&pid_u32);
-                let _ = hub_tx
-                    .send(HubCommand::StopThrottle { pid: pid_u32 })
-                    .await;
+                let _ = hub_tx.send(HubCommand::StopThrottle { pid: pid_u32 }).await;
             }
         }
 

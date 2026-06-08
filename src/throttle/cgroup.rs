@@ -10,9 +10,7 @@ pub struct CgroupThrottle {
 
 impl CgroupThrottle {
     pub fn new() -> Self {
-        Self {
-            active: Vec::new(),
-        }
+        Self { active: Vec::new() }
     }
 
     pub fn start(&mut self, pid: u32, cpu_usage: f32, threshold: f32) -> Result<(), String> {
@@ -21,8 +19,7 @@ impl CgroupThrottle {
         }
 
         let cgroup_path = cgroup_dir(pid);
-        fs::create_dir_all(&cgroup_path)
-            .map_err(|e| format!("create cgroup: {e}"))?;
+        fs::create_dir_all(&cgroup_path).map_err(|e| format!("create cgroup: {e}"))?;
 
         let cpu_max = compute_cpu_max(cpu_usage, threshold);
         fs::write(cgroup_path.join("cpu.max"), cpu_max)

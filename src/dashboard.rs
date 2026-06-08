@@ -35,9 +35,7 @@ pub fn open_dashboard() {
         }
     }
 
-    tracing::error!(
-        "no terminal emulator available; run `wrangler` directly in a terminal"
-    );
+    tracing::error!("no terminal emulator available; run `wrangler` directly in a terminal");
 }
 
 fn terminal_available(name: &str) -> bool {
