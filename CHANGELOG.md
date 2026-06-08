@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (4fb84ab)
+
+### Bugfixes
+
+- Close attached dashboards when quitting from the tray or when the daemon shuts down
+
 ## 1.0.0 (3c3336f)
 
 ### Features and Improvements

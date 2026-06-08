@@ -57,10 +57,6 @@ pub async fn run_ui(
     let mut expanded_groups = HashSet::new();
 
     loop {
-        if *shutdown_rx.borrow_and_update() || state.quitting {
-            break;
-        }
-
         let mut dirty = false;
 
         if state_rx.has_changed().unwrap_or(false) {
@@ -72,6 +68,10 @@ pub async fn run_ui(
                 table_viewport_rows(Rect::new(0, 0, size.width, size.height)),
             );
             dirty = true;
+        }
+
+        if *shutdown_rx.borrow_and_update() || state.quitting {
+            break;
         }
 
         let viewport = table_viewport_rows(terminal.size()?.into());
@@ -123,6 +123,9 @@ pub async fn run_ui(
             changed = state_rx.changed() => {
                 if changed.is_ok() {
                     state = state_rx.borrow_and_update().clone();
+                    if state.quitting || *shutdown_rx.borrow_and_update() {
+                        break;
+                    }
                     let size = terminal.size()?;
                     clamp_table_offset(
                         &mut table_state,
@@ -137,6 +140,11 @@ pub async fn run_ui(
                         view_mode,
                         &expanded_groups,
                     ))?;
+                }
+            }
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow_and_update() {
+                    break;
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(16)) => {}

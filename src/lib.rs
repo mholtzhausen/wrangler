@@ -143,6 +143,7 @@ async fn run_attach_tui() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("failed to connect to wrangler daemon: {e}"))?;
 
     let state_rx = session.state_rx();
+    let shutdown_rx = session.shutdown_rx();
     let session = Arc::new(Mutex::new(Some(session)));
 
     let (ui_action_tx, mut ui_action_rx) = mpsc::channel::<UiAction>(16);
@@ -161,8 +162,6 @@ async fn run_attach_tui() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-
-    let shutdown_rx = watch::channel(false).1;
 
     run_tui_loop(
         state_rx,

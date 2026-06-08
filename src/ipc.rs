@@ -263,6 +263,7 @@ async fn send_message(tx: &mpsc::Sender<ServerMessage>, msg: ServerMessage) -> R
 pub struct AttachSession {
     request_tx: mpsc::Sender<ClientRequest>,
     state_tx: watch::Sender<AppState>,
+    shutdown_tx: watch::Sender<bool>,
     _reader_task: JoinHandle<()>,
     _writer_task: JoinHandle<()>,
 }
@@ -280,6 +281,7 @@ impl AttachSession {
             Vec::new(),
         ));
         let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
+        let (shutdown_tx, _) = watch::channel(false);
 
         let writer_task = tokio::spawn(async move {
             while let Some(req) = request_rx.recv().await {
@@ -299,6 +301,7 @@ impl AttachSession {
         request_tx.send(ClientRequest::Subscribe).await?;
 
         let reader_state_tx = state_tx.clone();
+        let reader_shutdown_tx = shutdown_tx.clone();
         let reader_task = tokio::spawn(async move {
             let mut lines = BufReader::new(read_half).lines();
             let mut initial_tx = Some(initial_tx);
@@ -310,9 +313,13 @@ impl AttachSession {
                 };
                 match msg {
                     ServerMessage::State { data } => {
+                        let quitting = data.quitting;
                         let _ = reader_state_tx.send(*data);
                         if let Some(tx) = initial_tx.take() {
                             let _ = tx.send(());
+                        }
+                        if quitting {
+                            let _ = reader_shutdown_tx.send(true);
                         }
                     }
                     ServerMessage::Ok => {}
@@ -321,6 +328,7 @@ impl AttachSession {
                     }
                 }
             }
+            let _ = reader_shutdown_tx.send(true);
         });
 
         tokio::time::timeout(std::time::Duration::from_secs(2), initial_rx)
@@ -330,6 +338,7 @@ impl AttachSession {
         Ok(Self {
             request_tx,
             state_tx,
+            shutdown_tx,
             _reader_task: reader_task,
             _writer_task: writer_task,
         })
@@ -337,6 +346,10 @@ impl AttachSession {
 
     pub fn state_rx(&self) -> watch::Receiver<AppState> {
         self.state_tx.subscribe()
+    }
+
+    pub fn shutdown_rx(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
     }
 
     pub async fn set_app_cap(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
@@ -435,6 +448,46 @@ mod integration_tests {
             .await
             .expect("subscribe should succeed");
         assert_eq!(session.state_rx().borrow().app_cap, 70.0);
+        session.detach().await.unwrap();
+
+        std::env::remove_var("WRANGLER_RUNTIME_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn attach_session_exits_when_daemon_quits() {
+        let dir = test_runtime_dir();
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("WRANGLER_RUNTIME_DIR", &dir);
+
+        let hub = spawn_event_hub(
+            70.0,
+            85.0,
+            crate::policy::GroupingMode::Tree,
+            Vec::new(),
+            ThrottleBackend::Signal,
+        );
+        let _server = spawn_server(hub.command_tx.clone(), hub.state_rx.clone())
+            .await
+            .unwrap();
+
+        let session = AttachSession::connect()
+            .await
+            .expect("subscribe should succeed");
+        let mut shutdown_rx = session.shutdown_rx();
+
+        hub.command_tx
+            .send(crate::event::HubCommand::Quit)
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), shutdown_rx.changed())
+            .await
+            .expect("shutdown should be signaled")
+            .expect("shutdown channel should stay open");
+        assert!(*shutdown_rx.borrow_and_update());
+
         session.detach().await.unwrap();
 
         std::env::remove_var("WRANGLER_RUNTIME_DIR");
