@@ -129,7 +129,8 @@ async fn handle_command(
             stop_pid(pid, active, throttle_tx, backend, use_cgroups).await;
         }
         HubCommand::SetThreshold(threshold) => {
-            state.cpu_threshold = threshold.clamp(1.0, 100.0);
+            state.cpu_threshold = crate::config::clamp_threshold(threshold);
+            let _ = crate::config::Config::update_threshold(state.cpu_threshold);
             broadcast(state_tx, state);
         }
         HubCommand::Quit => {

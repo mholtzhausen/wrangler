@@ -1,7 +1,7 @@
 use crate::cli::Cli;
 use crate::dashboard;
 use crate::event::HubCommand;
-use crate::runtime::CoreRuntime;
+use crate::runtime::{CoreRuntime, RuntimeSettings};
 use tokio::sync::mpsc;
 
 #[cfg(target_os = "linux")]
@@ -166,8 +166,11 @@ async fn wait_sigterm() {
     std::future::pending::<()>().await;
 }
 
-pub async fn run_from_cli(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let core = crate::runtime::spawn_core(cli);
+pub async fn run_from_cli(
+    cli: &Cli,
+    settings: RuntimeSettings,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let core = crate::runtime::spawn_core(&settings);
     let _ipc = crate::ipc::spawn_server(
         core.hub.command_tx.clone(),
         core.hub.state_rx.clone(),

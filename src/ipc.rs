@@ -10,6 +10,9 @@ use tokio::task::JoinHandle;
 const SOCKET_NAME: &str = "wrangler.sock";
 
 pub fn socket_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("WRANGLER_RUNTIME_DIR") {
+        return PathBuf::from(dir).join(SOCKET_NAME);
+    }
     if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
         return PathBuf::from(dir).join(SOCKET_NAME);
     }
@@ -74,21 +77,43 @@ impl Drop for IpcServerGuard {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
-enum ClientRequest {
+pub enum ClientRequest {
     Ping,
     Subscribe,
     SetThreshold { value: f32 },
     Detach,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ServerMessage {
+pub enum ServerMessage {
     Ok,
     Error { message: String },
     State { data: AppState },
+}
+
+pub async fn daemon_running() -> bool {
+    ping().await.is_ok()
+}
+
+pub async fn ping() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut stream = UnixStream::connect(socket_path()).await?;
+    let request = serde_json::to_string(&ClientRequest::Ping)? + "\n";
+    stream.write_all(request.as_bytes()).await?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    tokio::time::timeout(std::time::Duration::from_secs(1), reader.read_line(&mut line))
+        .await
+        .map_err(|_| "daemon ping timed out")??;
+
+    match serde_json::from_str::<ServerMessage>(line.trim())? {
+        ServerMessage::Ok => Ok(()),
+        ServerMessage::Error { message } => Err(message.into()),
+        other => Err(format!("unexpected ping response: {other:?}").into()),
+    }
 }
 
 async fn handle_client(
@@ -152,9 +177,8 @@ async fn handle_client(
                 }));
             }
             ClientRequest::SetThreshold { value } => {
-                let _ = hub_tx
-                    .send(HubCommand::SetThreshold(value.clamp(1.0, 100.0)))
-                    .await;
+                let clamped = crate::config::clamp_threshold(value);
+                let _ = hub_tx.send(HubCommand::SetThreshold(clamped)).await;
                 let _ = send_message(&out_tx, ServerMessage::Ok).await;
             }
             ClientRequest::Detach => break,
@@ -250,7 +274,9 @@ impl AttachSession {
 
     pub async fn set_threshold(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
         self.request_tx
-            .send(ClientRequest::SetThreshold { value })
+            .send(ClientRequest::SetThreshold {
+                value: crate::config::clamp_threshold(value),
+            })
             .await?;
         Ok(())
     }
@@ -258,5 +284,59 @@ impl AttachSession {
     pub async fn detach(self) -> Result<(), Box<dyn std::error::Error>> {
         let _ = self.request_tx.send(ClientRequest::Detach).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::spawn_event_hub;
+    use crate::throttle::ThrottleBackend;
+    use std::fs;
+
+    fn test_runtime_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "wrangler-ipc-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn protocol_serde_roundtrip() {
+        let req = ClientRequest::SetThreshold { value: 42.0 };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: ClientRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, req);
+
+        let msg = ServerMessage::Ok;
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, msg);
+    }
+
+    #[tokio::test]
+    async fn daemon_ping_and_subscribe() {
+        let dir = test_runtime_dir();
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("WRANGLER_RUNTIME_DIR", &dir);
+
+        let hub = spawn_event_hub(70.0, ThrottleBackend::Signal);
+        let _server = spawn_server(hub.command_tx.clone(), hub.state_rx.clone())
+            .await
+            .unwrap();
+
+        ping().await.expect("ping should succeed");
+
+        let session = AttachSession::connect().await.expect("subscribe should succeed");
+        assert_eq!(session.state_rx().borrow().cpu_threshold, 70.0);
+        session.detach().await.unwrap();
+
+        std::env::remove_var("WRANGLER_RUNTIME_DIR");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

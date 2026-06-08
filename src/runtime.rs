@@ -1,18 +1,27 @@
+use std::time::Duration;
+
 use crate::cli::Cli;
 use crate::event::{spawn_event_hub, HubHandles};
 use crate::monitor::{protected_pids, run_monitor_with_threshold, MonitorConfig};
 use crate::throttle::ThrottleBackend;
 use tokio::sync::watch;
 
+#[derive(Debug, Clone)]
+pub struct RuntimeSettings {
+    pub threshold: f32,
+    pub interval: Duration,
+    pub cgroups: bool,
+}
+
 pub struct CoreRuntime {
     pub hub: HubHandles,
 }
 
-pub fn spawn_core(cli: &Cli) -> CoreRuntime {
-    let backend = ThrottleBackend::from_cli(cli.cgroups);
-    let hub = spawn_event_hub(cli.threshold, backend);
+pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
+    let backend = ThrottleBackend::from_cli(settings.cgroups);
+    let hub = spawn_event_hub(settings.threshold, backend);
 
-    let (threshold_watch_tx, threshold_watch_rx) = watch::channel(cli.threshold);
+    let (threshold_watch_tx, threshold_watch_rx) = watch::channel(settings.threshold);
     {
         let mut state_rx = hub.state_rx.clone();
         tokio::spawn(async move {
@@ -27,7 +36,7 @@ pub fn spawn_core(cli: &Cli) -> CoreRuntime {
     }
 
     let monitor_config = MonitorConfig {
-        interval: cli.interval_duration(),
+        interval: settings.interval,
         self_pid: std::process::id(),
         protected_pids: protected_pids(),
     };
@@ -38,4 +47,9 @@ pub fn spawn_core(cli: &Cli) -> CoreRuntime {
     });
 
     CoreRuntime { hub }
+}
+
+#[allow(dead_code)]
+pub fn spawn_core_from_cli(cli: &Cli) -> CoreRuntime {
+    spawn_core(&cli.resolve())
 }

@@ -81,7 +81,7 @@ impl Tray for WranglerTray {
 }
 
 #[cfg(target_os = "linux")]
-pub async fn spawn(
+pub(crate) async fn spawn(
     action_tx: mpsc::Sender<TrayAction>,
 ) -> Result<Handle<WranglerTray>, ksni::Error> {
     WranglerTray { action_tx }
