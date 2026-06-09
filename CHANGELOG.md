@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 (1618ee0)
+
+### Features and Improvements
+
+- Bad actors panel replaces mitigation logs; tracks per-group throttle counts, peak/last CPU, and cumulative throttle time
+- Scalable footer panel grows up to 10 lines or half the terminal height
+- `wrangler kill` command to stop user, root, or all wrangler instances (`--sudo`, `--all`)
+- MIT `LICENSE` and personal-use README footer
+
 ## 1.0.1 (b3af944)
 
 ### Bugfixes

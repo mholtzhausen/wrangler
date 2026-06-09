@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/
 Pin a specific version:
 
 ```bash
-WRANGLER_VERSION=1.0.1 curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
+WRANGLER_VERSION=1.1.0 curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
 ```
 
 The script is also in the repo: [`scripts/install.sh`](scripts/install.sh).
