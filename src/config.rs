@@ -59,8 +59,20 @@ fn default_interval_ms() -> u64 {
     DEFAULT_INTERVAL_MS
 }
 
-pub fn clamp_app_cap(value: f32) -> f32 {
-    value.clamp(1.0, 100.0)
+/// Upper bound for app cap: 90% of total machine CPU (htop units: 100% = one core).
+pub fn max_app_cap(num_cores: usize) -> f32 {
+    0.9 * num_cores.max(1) as f32 * 100.0
+}
+
+pub fn available_cpu_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .max(1)
+}
+
+pub fn clamp_app_cap(value: f32, num_cores: usize) -> f32 {
+    value.clamp(1.0, max_app_cap(num_cores))
 }
 
 pub fn clamp_pressure_threshold(value: f32) -> f32 {
@@ -125,14 +137,32 @@ impl Config {
         }
     }
 
-    pub fn update_app_cap(app_cap: f32) -> io::Result<()> {
+    pub fn update_app_cap(app_cap: f32, num_cores: usize) -> io::Result<()> {
         let path = config_path();
-        Self::update_app_cap_at(&path, app_cap)
+        Self::update_app_cap_at(&path, app_cap, num_cores)
     }
 
-    pub fn update_app_cap_at(path: &std::path::Path, app_cap: f32) -> io::Result<()> {
+    pub fn update_app_cap_at(
+        path: &std::path::Path,
+        app_cap: f32,
+        num_cores: usize,
+    ) -> io::Result<()> {
         let mut config = Self::load_from(path);
-        config.app_cap = clamp_app_cap(app_cap);
+        config.app_cap = clamp_app_cap(app_cap, num_cores);
+        config.save_to(path)
+    }
+
+    pub fn update_pressure_threshold(pressure_threshold: f32) -> io::Result<()> {
+        let path = config_path();
+        Self::update_pressure_threshold_at(&path, pressure_threshold)
+    }
+
+    pub fn update_pressure_threshold_at(
+        path: &std::path::Path,
+        pressure_threshold: f32,
+    ) -> io::Result<()> {
+        let mut config = Self::load_from(path);
+        config.pressure_threshold = clamp_pressure_threshold(pressure_threshold);
         config.save_to(path)
     }
 }
@@ -177,9 +207,12 @@ mod tests {
 
     #[test]
     fn clamp_app_cap_bounds() {
-        assert_eq!(clamp_app_cap(0.0), 1.0);
-        assert_eq!(clamp_app_cap(50.0), 50.0);
-        assert_eq!(clamp_app_cap(150.0), 100.0);
+        assert_eq!(clamp_app_cap(0.0, 1), 1.0);
+        assert_eq!(clamp_app_cap(50.0, 1), 50.0);
+        assert_eq!(clamp_app_cap(150.0, 1), 90.0);
+        assert_eq!(max_app_cap(8), 720.0);
+        assert_eq!(clamp_app_cap(800.0, 8), 720.0);
+        assert_eq!(clamp_app_cap(400.0, 8), 400.0);
     }
 
     #[test]
@@ -204,8 +237,17 @@ mod tests {
     fn update_app_cap_persists() {
         let path = temp_config_path();
         Config::default().save_to(&path).unwrap();
-        Config::update_app_cap_at(&path, 42.0).unwrap();
+        Config::update_app_cap_at(&path, 42.0, 8).unwrap();
         assert_eq!(Config::load_from(&path).app_cap, 42.0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn update_pressure_threshold_persists() {
+        let path = temp_config_path();
+        Config::default().save_to(&path).unwrap();
+        Config::update_pressure_threshold_at(&path, 70.0).unwrap();
+        assert_eq!(Config::load_from(&path).pressure_threshold, 70.0);
         let _ = fs::remove_file(path);
     }
 

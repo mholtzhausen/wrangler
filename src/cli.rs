@@ -120,11 +120,12 @@ impl Cli {
     }
 
     pub fn resolve_with(&self, file: &Config) -> RuntimeSettings {
+        let num_cores = crate::config::available_cpu_cores();
         RuntimeSettings {
             app_cap: self
                 .app_cap
-                .map(crate::config::clamp_app_cap)
-                .unwrap_or(file.app_cap),
+                .map(|value| crate::config::clamp_app_cap(value, num_cores))
+                .unwrap_or_else(|| crate::config::clamp_app_cap(file.app_cap, num_cores)),
             pressure_threshold: self
                 .pressure_threshold
                 .map(crate::config::clamp_pressure_threshold)

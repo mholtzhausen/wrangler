@@ -86,6 +86,7 @@ pub enum ClientRequest {
     SetAppCap { value: f32 },
     #[serde(alias = "set_threshold")]
     SetThreshold { value: f32 },
+    SetPressureThreshold { value: f32 },
     Detach,
     Quit,
 }
@@ -237,8 +238,16 @@ async fn handle_client(
                 }));
             }
             ClientRequest::SetAppCap { value } | ClientRequest::SetThreshold { value } => {
-                let clamped = crate::config::clamp_app_cap(value);
+                let num_cores = state_rx.borrow().num_cores;
+                let clamped = crate::config::clamp_app_cap(value, num_cores);
                 let _ = hub_tx.send(HubCommand::SetAppCap(clamped)).await;
+                let _ = send_message(&out_tx, ServerMessage::Ok).await;
+            }
+            ClientRequest::SetPressureThreshold { value } => {
+                let clamped = crate::config::clamp_pressure_threshold(value);
+                let _ = hub_tx
+                    .send(HubCommand::SetPressureThreshold(clamped))
+                    .await;
                 let _ = send_message(&out_tx, ServerMessage::Ok).await;
             }
             ClientRequest::Detach => break,
@@ -279,6 +288,7 @@ impl AttachSession {
             "signal",
             "tree",
             Vec::new(),
+            crate::config::available_cpu_cores(),
         ));
         let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
         let (shutdown_tx, _) = watch::channel(false);
@@ -353,9 +363,22 @@ impl AttachSession {
     }
 
     pub async fn set_app_cap(&self, value: f32) -> Result<(), Box<dyn std::error::Error>> {
+        let num_cores = self.state_tx.borrow().num_cores;
         self.request_tx
             .send(ClientRequest::SetAppCap {
-                value: crate::config::clamp_app_cap(value),
+                value: crate::config::clamp_app_cap(value, num_cores),
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_pressure_threshold(
+        &self,
+        value: f32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.request_tx
+            .send(ClientRequest::SetPressureThreshold {
+                value: crate::config::clamp_pressure_threshold(value),
             })
             .await?;
         Ok(())

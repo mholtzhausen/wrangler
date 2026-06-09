@@ -31,6 +31,7 @@ pub enum HubCommand {
         pids: Vec<u32>,
     },
     SetAppCap(f32),
+    SetPressureThreshold(f32),
     Quit,
 }
 
@@ -68,12 +69,16 @@ pub fn spawn_event_hub(
     let (command_tx, mut command_rx) = mpsc::channel::<HubCommand>(256);
     let (throttle_tx, mut throttle_rx) = mpsc::channel::<ThrottleEvent>(64);
     let backend_label = backend.mode_label().to_string();
+    let num_cores = crate::config::available_cpu_cores();
+    let initial_app_cap =
+        crate::config::clamp_app_cap(initial_app_cap, num_cores);
     let (state_tx, state_rx) = watch::channel(AppState::new(
         initial_app_cap,
         initial_pressure_threshold,
         backend_label.clone(),
         grouping.as_str(),
         protected_apps.clone(),
+        num_cores,
     ));
     let (shutdown_tx, _) = watch::channel(false);
     let shutdown_notify = shutdown_tx.clone();
@@ -88,6 +93,7 @@ pub fn spawn_event_hub(
             backend_label,
             grouping.as_str(),
             protected_apps,
+            num_cores,
         );
         let mut active: HashMap<u32, ActiveGroupThrottle> = HashMap::new();
         let mut throttle_started: HashMap<u32, Instant> = HashMap::new();
@@ -144,6 +150,11 @@ async fn handle_command(
             state.groups = groups;
             state.global_cpu = global_cpu;
             state.num_cores = num_cores;
+            let clamped_cap = crate::config::clamp_app_cap(state.app_cap, num_cores);
+            if clamped_cap != state.app_cap {
+                state.app_cap = clamped_cap;
+                let _ = crate::config::Config::update_app_cap(clamped_cap, num_cores);
+            }
             state.refresh_group_behavior_from_snapshot();
             broadcast(state_tx, state);
         }
@@ -300,14 +311,20 @@ async fn handle_command(
             broadcast(state_tx, state);
         }
         HubCommand::SetAppCap(app_cap) => {
-            state.app_cap = crate::config::clamp_app_cap(app_cap);
-            let _ = crate::config::Config::update_app_cap(state.app_cap);
+            state.app_cap = crate::config::clamp_app_cap(app_cap, state.num_cores);
+            let _ = crate::config::Config::update_app_cap(state.app_cap, state.num_cores);
             if use_cgroups {
                 let mut guard = backend.lock().await;
                 if let Err(e) = guard.update_all_caps(state.app_cap, state.num_cores) {
                     state.last_error = Some(format!("update cgroup caps: {e}"));
                 }
             }
+            broadcast(state_tx, state);
+        }
+        HubCommand::SetPressureThreshold(pressure_threshold) => {
+            state.pressure_threshold =
+                crate::config::clamp_pressure_threshold(pressure_threshold);
+            let _ = crate::config::Config::update_pressure_threshold(state.pressure_threshold);
             broadcast(state_tx, state);
         }
         HubCommand::Quit => {

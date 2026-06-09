@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 (unreleased)
+
+### Features and Improvements
+
+- App cap upper limit scales with core count (90% × cores × 100 htop CPU%)
+- Adjust pressure threshold from the dashboard with `]` / `[` (±5, persisted to config)
+- Help modal (`?`) with full keyboard shortcut reference
+- Redesigned status bar with bracketed segments and pressure-aware throttle cap display
+
 ## 1.3.0 (77440d7)
 
 ### Features and Improvements

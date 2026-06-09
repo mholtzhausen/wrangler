@@ -118,6 +118,7 @@ impl AppState {
         throttle_backend: impl Into<String>,
         grouping: impl Into<String>,
         protected_apps: Vec<String>,
+        num_cores: usize,
     ) -> Self {
         Self {
             processes: Vec::new(),
@@ -127,7 +128,7 @@ impl AppState {
             app_cap,
             pressure_threshold,
             global_cpu: 0.0,
-            num_cores: 1,
+            num_cores: num_cores.max(1),
             grouping: grouping.into(),
             protected_apps,
             throttle_backend: throttle_backend.into(),
@@ -246,7 +247,7 @@ mod tests {
 
     #[test]
     fn top_bad_actors_ranks_by_throttle_count_then_peak_cpu() {
-        let mut state = AppState::new(40.0, 85.0, "signal", "tree", Vec::new());
+        let mut state = AppState::new(40.0, 85.0, "signal", "tree", Vec::new(), 8);
         state.record_throttle_start(1, "chrome", 55.0);
         state.record_throttle_start(2, "firefox", 90.0);
         state.record_throttle_start(2, "firefox", 70.0);

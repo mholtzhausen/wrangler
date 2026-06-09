@@ -25,8 +25,10 @@ pub struct CoreRuntime {
 pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
     let backend = ThrottleBackend::resolve(settings.cgroups);
     let protected_apps = effective_protected_apps(&settings.protected_apps);
+    let num_cores = crate::config::available_cpu_cores();
+    let app_cap = crate::config::clamp_app_cap(settings.app_cap, num_cores);
     let hub = spawn_event_hub(
-        settings.app_cap,
+        app_cap,
         settings.pressure_threshold,
         settings.grouping,
         protected_apps.clone(),
@@ -36,7 +38,7 @@ pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
     let top_offenders = settings.top_offenders;
     let grouping = settings.grouping;
     let (policy_watch_tx, policy_watch_rx) = watch::channel(PolicySettings {
-        app_cap: settings.app_cap,
+        app_cap,
         pressure_threshold: settings.pressure_threshold,
         top_offenders,
         grouping,
@@ -67,7 +69,7 @@ pub fn spawn_core(settings: &RuntimeSettings) -> CoreRuntime {
         protected_apps: settings.protected_apps.clone(),
         grouping: settings.grouping,
         policy: PolicySettings {
-            app_cap: settings.app_cap,
+            app_cap,
             pressure_threshold: settings.pressure_threshold,
             top_offenders: settings.top_offenders,
             grouping: settings.grouping,

@@ -123,6 +123,9 @@ async fn run_standalone_tui(core: runtime::CoreRuntime) -> Result<(), Box<dyn st
                 UiAction::SetAppCap(t) => {
                     let _ = hub_for_ui.send(HubCommand::SetAppCap(t)).await;
                 }
+                UiAction::SetPressureThreshold(t) => {
+                    let _ = hub_for_ui.send(HubCommand::SetPressureThreshold(t)).await;
+                }
                 UiAction::Quit => {
                     let _ = hub_for_ui.send(HubCommand::Quit).await;
                 }
@@ -165,6 +168,9 @@ async fn run_attach_tui() -> Result<(), Box<dyn std::error::Error>> {
             match action {
                 UiAction::SetAppCap(t) => {
                     let _ = active.set_app_cap(t).await;
+                }
+                UiAction::SetPressureThreshold(t) => {
+                    let _ = active.set_pressure_threshold(t).await;
                 }
                 UiAction::Quit => break,
             }

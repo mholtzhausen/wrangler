@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/
 Pin a specific version:
 
 ```bash
-WRANGLER_VERSION=1.3.0 curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
+WRANGLER_VERSION=1.4.0 curl -fsSL https://raw.githubusercontent.com/mholtzhausen/wrangler/main/scripts/install.sh | bash
 ```
 
 The script is also in the repo: [`scripts/install.sh`](scripts/install.sh).
@@ -54,7 +54,7 @@ cargo run
 make run
 ```
 
-Keys: **g** flat/grouped view (grouped by default), **o** expand group, **+/-** app cap, **Up/Down** scroll, **q/Esc** quit. The process table shows per-core **CPU %**, total **Machine %**, plus **User** and **Group** for each row.
+Keys: **g** flat/grouped view (grouped by default), **o** expand group, **+/-** app cap, **]/**[** pressure threshold, **?** help, **Up/Down** scroll, **q/Esc** quit. The process table shows per-core **CPU %**, total **Machine %**, plus **User** and **Group** for each row.
 
 ### Background daemon + tray
 
@@ -91,7 +91,7 @@ If a daemon is already running, launching `wrangler` without flags automatically
 Settings are stored at `~/.config/wrangler/config.toml`:
 
 ```toml
-app_cap = 40.0              # max % of machine CPU per app group
+app_cap = 40.0              # per-core CPU cap (100% = one core); max 90% × cores × 100
 pressure_threshold = 85.0   # global CPU % before throttling may engage (0 = always)
 top_offenders = 1           # how many hottest groups to consider
 grouping = "tree"           # tree (process tree root) or name (executable name)
@@ -102,7 +102,7 @@ use_cgroups = false
 
 The legacy `threshold` key is still accepted on load and maps to `app_cap`. On first load, legacy configs are rewritten to the current schema automatically.
 
-**Dashboard keys:** `g` toggle flat/grouped view, `o`/`Enter` expand/collapse a group, `+/-` app cap, `Up/Down` scroll.
+**Dashboard keys:** `g` toggle flat/grouped view, `o`/`Enter` expand/collapse a group, `+/-` app cap, `]`/`[` pressure threshold, `?` help, `Up/Down` scroll.
 
 CLI flags override the file for that invocation. App cap changes from the dashboard are saved automatically.
 
