@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0 (b480698)
+## 1.3.0 (77440d7)
 
 ### Features and Improvements
 
