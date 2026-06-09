@@ -7,6 +7,7 @@ pub mod dashboard;
 pub mod event;
 pub mod instance;
 pub mod ipc;
+pub mod kill;
 pub mod monitor;
 pub mod policy;
 pub mod runtime;
@@ -48,6 +49,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Some(Commands::Install(opts)) => return binary_install::install(opts),
         Some(Commands::Uninstall(opts)) => return binary_install::uninstall(opts),
+        Some(Commands::Kill(opts)) => return kill::run(opts),
         #[cfg(target_os = "linux")]
         Some(Commands::Service(service_args)) => return service::run(&service_args.command),
         #[cfg(not(target_os = "linux"))]

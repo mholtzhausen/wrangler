@@ -130,6 +130,16 @@ Installs `/usr/local/bin/wrangler`, a headless root system unit for cgroup throt
 
 `make install-systemd` is equivalent to `wrangler service install`.
 
+### Stop running instances
+
+```bash
+wrangler kill              # stop your user's wrangler processes
+wrangler kill --sudo       # stop root/system wrangler processes
+wrangler kill --all        # stop both user and root instances
+```
+
+Stops matching systemd units when present, sends `SIGTERM`, then `SIGKILL` to any remaining wrangler processes (daemon, tray client, attached dashboards).
+
 ## CLI reference
 
 | Flag | Description |
@@ -196,6 +206,19 @@ Monitor (sysinfo) ──► Event Hub ◄── TUI / IPC clients
 
 The daemon exposes a Unix socket at `$XDG_RUNTIME_DIR/wrangler.sock` for dashboard attach and app cap sync.
 
+## ⚠️ Project Status: Personal Use Only
+
+This software was written to solve my own problems and make my life easier. I am sharing it publicly in case others find it useful, but please note the following boundaries:
+
+* **Maintained for One:** I will update, change, or break this software whenever my personal workflow requires it. I do not promise backward compatibility or stability for external users.
+* **No Support or Feature Requests:** I do not have the time or inclination to answer questions, troubleshoot setups, or implement feature requests for others. 
+* **No Pull Requests:** I am not accepting external contributions or PRs. Any opened PRs will be closed without review.
+* **Forks are Encouraged:** If you want to adapt this to your own needs, fix a bug, or take it in a different direction, please **fork the repository**. You have total freedom to maintain your own fork!
+
+---
+
 ## License
 
-See repository for license details.
+This project is licensed under the MIT License. You are free to use, modify, and distribute this software for any purpose, provided you retain the original copyright and attribution notice.
+
+See the [LICENSE](LICENSE) file for details.

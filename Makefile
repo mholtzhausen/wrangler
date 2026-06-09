@@ -84,6 +84,7 @@ help:
 	@echo "  wrangler install --sudo           Install local build to /usr/local/bin"
 	@echo "  wrangler service install          Install user systemd unit (tray)"
 	@echo "  wrangler service install --sudo   Install system systemd unit (cgroups + tray)"
+	@echo "  wrangler kill [--sudo|--all]        Stop running wrangler processes"
 	@echo "  make test         Run tests"
 	@echo "  make ci           Run fmt-check, clippy, and test (matches CI check job)"
 	@echo "  make e2e          Run end-to-end throttle smoke test (needs stress-ng)"

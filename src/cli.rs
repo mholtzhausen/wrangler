@@ -15,6 +15,8 @@ pub enum Commands {
     Install(InstallOptions),
     /// Remove wrangler binary from /usr/local/bin/wrangler
     Uninstall(InstallOptions),
+    /// Stop running wrangler processes
+    Kill(KillOptions),
 }
 
 #[derive(Debug, Parser, Default)]
@@ -22,6 +24,16 @@ pub struct InstallOptions {
     /// Run privileged operations via sudo
     #[arg(long)]
     pub sudo: bool,
+}
+
+#[derive(Debug, Parser, Default)]
+pub struct KillOptions {
+    /// Kill wrangler processes running as root (system daemon)
+    #[arg(long)]
+    pub sudo: bool,
+    /// Kill both user and root wrangler processes
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -284,6 +296,42 @@ mod tests {
         match cli.command {
             Some(Commands::Uninstall(opts)) => assert!(!opts.sudo),
             other => panic!("expected uninstall command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kill_command_parses_default() {
+        let cli = Cli::try_parse_from(["wrangler", "kill"]).unwrap();
+        match cli.command {
+            Some(Commands::Kill(opts)) => {
+                assert!(!opts.sudo);
+                assert!(!opts.all);
+            }
+            other => panic!("expected kill command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kill_command_parses_sudo_flag() {
+        let cli = Cli::try_parse_from(["wrangler", "kill", "--sudo"]).unwrap();
+        match cli.command {
+            Some(Commands::Kill(opts)) => {
+                assert!(opts.sudo);
+                assert!(!opts.all);
+            }
+            other => panic!("expected kill command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kill_command_parses_all_flag() {
+        let cli = Cli::try_parse_from(["wrangler", "kill", "--all"]).unwrap();
+        match cli.command {
+            Some(Commands::Kill(opts)) => {
+                assert!(!opts.sudo);
+                assert!(opts.all);
+            }
+            other => panic!("expected kill command, got {other:?}"),
         }
     }
 }
