@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 (b480698)
+
+### Features and Improvements
+
+- Systray icon is a pressure-colored dot (green → yellow → orange → red) based on a 5-second rolling CPU average; red at ≥80% capacity
+- Icon updates only when the color band changes; tooltip shows current pressure and average
+- White “w” mark centered in the dot with anti-aliased edges
+
 ## 1.2.0 (1465339)
 
 ### Features and Improvements

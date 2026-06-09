@@ -21,7 +21,7 @@ pub async fn run(core: CoreRuntime, cli: &Cli) -> Result<(), Box<dyn std::error:
 
     #[cfg(target_os = "linux")]
     let mut tray_context = if cli.tray_enabled() {
-        spawn_tray_context().await
+        spawn_tray_context(core.hub.state_rx.clone()).await
     } else {
         TrayContext::disabled()
     };
@@ -41,6 +41,9 @@ pub async fn run(core: CoreRuntime, cli: &Cli) -> Result<(), Box<dyn std::error:
 
     #[cfg(target_os = "linux")]
     {
+        if let Some(task) = tray_context.pressure_task.take() {
+            task.abort();
+        }
         if let Some(handle) = tray_context.handle.take() {
             handle.shutdown();
         }
@@ -58,6 +61,7 @@ struct TrayContext {
     rx: Option<mpsc::Receiver<TrayAction>>,
     handle: Option<ksni::Handle<crate::tray::WranglerTray>>,
     user_client: Option<std::process::Child>,
+    pressure_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -67,24 +71,28 @@ impl TrayContext {
             rx: None,
             handle: None,
             user_client: None,
+            pressure_task: None,
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-async fn spawn_tray_context() -> TrayContext {
+async fn spawn_tray_context(
+    state_rx: tokio::sync::watch::Receiver<crate::app::AppState>,
+) -> TrayContext {
     if nix::unistd::geteuid().is_root() {
         return spawn_root_tray_client();
     }
 
     let (tx, rx) = tray::action_channel();
-    match tray::spawn(tx).await {
-        Ok(handle) => {
+    match tray::spawn_with_state(tx, state_rx).await {
+        Ok((handle, pressure_task)) => {
             tracing::info!("system tray active");
             TrayContext {
                 rx: Some(rx),
                 handle: Some(handle),
                 user_client: None,
+                pressure_task: Some(pressure_task),
             }
         }
         Err(e) => {
@@ -101,6 +109,7 @@ fn spawn_root_tray_client() -> TrayContext {
             rx: None,
             handle: None,
             user_client: Some(child),
+            pressure_task: None,
         },
         Err(e) => {
             tracing::warn!(

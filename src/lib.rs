@@ -17,6 +17,7 @@ pub mod service;
 pub mod throttle;
 pub mod ui;
 
+pub mod tray_indicator;
 #[cfg(target_os = "linux")]
 pub mod tray;
 #[cfg(target_os = "linux")]

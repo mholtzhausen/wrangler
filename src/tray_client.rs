@@ -15,7 +15,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut state_rx = session.state_rx();
 
     let (tx, mut rx) = tray::action_channel();
-    let handle = tray::spawn(tx)
+    let (handle, pressure_task) = tray::spawn_with_state(tx, state_rx.clone())
         .await
         .map_err(|error| format!("system tray unavailable: {error}"))?;
     tracing::info!("tray client connected to daemon");
@@ -41,6 +41,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    pressure_task.abort();
     handle.shutdown();
     session.detach().await?;
     Ok(())
