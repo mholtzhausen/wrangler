@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 (1618ee0)
+## 1.1.0 (a7c0f1d)
 
 ### Features and Improvements
 
