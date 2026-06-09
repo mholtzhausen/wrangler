@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+### Bugfixes
+
+- Curl install script stops running wrangler instances before upgrading the binary
+- `wrangler install --sudo` honors `WRANGLER_INSTALL_DIR` (same target as the install script)
+
 ## 1.1.0 (a7c0f1d)
 
 ### Features and Improvements

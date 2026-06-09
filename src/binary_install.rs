@@ -1,32 +1,43 @@
 use crate::cli::InstallOptions;
 use nix::unistd::geteuid;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub const DEFAULT_INSTALL_DIR: &str = "/usr/local/bin";
 pub const SYSTEM_BIN_PATH: &str = "/usr/local/bin/wrangler";
+
+pub fn install_bin_dir() -> PathBuf {
+    std::env::var("WRANGLER_INSTALL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_INSTALL_DIR))
+}
+
+pub fn install_bin_path() -> PathBuf {
+    install_bin_dir().join("wrangler")
+}
 
 pub fn install(opts: &InstallOptions) -> Result<(), Box<dyn std::error::Error>> {
     ensure_privileged(opts.sudo, "install")?;
 
     let exe = std::env::current_exe()?;
-    let dest = Path::new(SYSTEM_BIN_PATH);
-    copy_binary(&exe, dest, opts.sudo)?;
+    let dest = install_bin_path();
+    copy_binary(&exe, &dest, opts.sudo)?;
 
-    println!("Installed {SYSTEM_BIN_PATH}");
+    println!("Installed {}", dest.display());
     Ok(())
 }
 
 pub fn uninstall(opts: &InstallOptions) -> Result<(), Box<dyn std::error::Error>> {
     ensure_privileged(opts.sudo, "uninstall")?;
 
-    let dest = Path::new(SYSTEM_BIN_PATH);
+    let dest = install_bin_path();
     if !dest.exists() {
-        println!("No binary at {SYSTEM_BIN_PATH}");
+        println!("No binary at {}", dest.display());
         return Ok(());
     }
 
-    remove_path(dest, opts.sudo)?;
-    println!("Removed {SYSTEM_BIN_PATH}");
+    remove_path(&dest, opts.sudo)?;
+    println!("Removed {}", dest.display());
     Ok(())
 }
 
@@ -118,4 +129,22 @@ pub fn remove_path(path: &Path, requested_sudo: bool) -> Result<(), Box<dyn std:
     }
     std::fs::remove_file(path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_bin_path_defaults_to_system_location() {
+        std::env::remove_var("WRANGLER_INSTALL_DIR");
+        assert_eq!(install_bin_path(), PathBuf::from(SYSTEM_BIN_PATH));
+    }
+
+    #[test]
+    fn install_bin_path_honors_env_override() {
+        std::env::set_var("WRANGLER_INSTALL_DIR", "/opt/bin");
+        assert_eq!(install_bin_path(), PathBuf::from("/opt/bin/wrangler"));
+        std::env::remove_var("WRANGLER_INSTALL_DIR");
+    }
 }

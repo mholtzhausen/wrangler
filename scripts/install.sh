@@ -81,6 +81,23 @@ has_install_subcommand() {
 	"$bin" --help 2>&1 | grep -qE '^  install[[:space:]]'
 }
 
+has_kill_subcommand() {
+	local bin="$1"
+	"$bin" --help 2>&1 | grep -qE '^  kill[[:space:]]'
+}
+
+stop_wrangler() {
+	local bin="$1"
+	if ! [[ -x "$bin" ]]; then
+		return 0
+	fi
+	if ! has_kill_subcommand "$bin"; then
+		return 0
+	fi
+	log "stopping wrangler instances via ${bin}"
+	WRANGLER_INSTALL_DIR="$INSTALL_DIR" "$bin" kill --all 2>/dev/null || true
+}
+
 main() {
 	need_cmd curl
 	need_cmd tar
@@ -104,6 +121,10 @@ main() {
 	chmod +x "${tmpdir}/${BINARY_NAME}"
 
 	bin_path="${INSTALL_DIR}/${BINARY_NAME}"
+	stop_wrangler "$bin_path"
+	stop_wrangler "${tmpdir}/${BINARY_NAME}"
+
+	export WRANGLER_INSTALL_DIR="$INSTALL_DIR"
 	if has_install_subcommand "${tmpdir}/${BINARY_NAME}"; then
 		log "installing to ${bin_path} via wrangler install --sudo"
 		"${tmpdir}/${BINARY_NAME}" install --sudo
