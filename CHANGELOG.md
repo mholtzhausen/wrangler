@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0
+## 1.2.0 (1465339)
 
 ### Features and Improvements
 
