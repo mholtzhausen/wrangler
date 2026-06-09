@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+### Features and Improvements
+
+- `--sudo` flag for daemon/tray mode: re-execs via `sudo -E` and enables cgroups as root
+- Root daemons spawn a `--tray-client` in the desktop user session so `sudo wrangler --tray` shows the tray icon
+- Session restore sets `WRANGLER_SOCKET_UID` for IPC socket ownership under sudo
+
 ## 1.1.1 (fccffca)
 
 ### Bugfixes

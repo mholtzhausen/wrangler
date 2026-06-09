@@ -40,8 +40,14 @@ pub async fn run(core: CoreRuntime, cli: &Cli) -> Result<(), Box<dyn std::error:
     }
 
     #[cfg(target_os = "linux")]
-    if let Some(handle) = tray_context.handle.take() {
-        handle.shutdown();
+    {
+        if let Some(handle) = tray_context.handle.take() {
+            handle.shutdown();
+        }
+        if let Some(mut child) = tray_context.user_client.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     Ok(())
@@ -51,6 +57,7 @@ pub async fn run(core: CoreRuntime, cli: &Cli) -> Result<(), Box<dyn std::error:
 struct TrayContext {
     rx: Option<mpsc::Receiver<TrayAction>>,
     handle: Option<ksni::Handle<crate::tray::WranglerTray>>,
+    user_client: Option<std::process::Child>,
 }
 
 #[cfg(target_os = "linux")]
@@ -59,12 +66,17 @@ impl TrayContext {
         Self {
             rx: None,
             handle: None,
+            user_client: None,
         }
     }
 }
 
 #[cfg(target_os = "linux")]
 async fn spawn_tray_context() -> TrayContext {
+    if nix::unistd::geteuid().is_root() {
+        return spawn_root_tray_client();
+    }
+
     let (tx, rx) = tray::action_channel();
     match tray::spawn(tx).await {
         Ok(handle) => {
@@ -72,17 +84,28 @@ async fn spawn_tray_context() -> TrayContext {
             TrayContext {
                 rx: Some(rx),
                 handle: Some(handle),
+                user_client: None,
             }
         }
         Err(e) => {
-            let hint = if nix::unistd::geteuid().is_root() {
-                " (when using sudo, ensure you launched from a logged-in desktop session)"
-            } else {
-                ""
-            };
+            tracing::warn!(error = %e, "system tray unavailable; continuing headless");
+            TrayContext::disabled()
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_root_tray_client() -> TrayContext {
+    match crate::session_env::spawn_tray_client_as_user() {
+        Ok(child) => TrayContext {
+            rx: None,
+            handle: None,
+            user_client: Some(child),
+        },
+        Err(e) => {
             tracing::warn!(
                 error = %e,
-                "system tray unavailable; continuing headless{hint}"
+                "could not spawn tray client for desktop user; continuing headless"
             );
             TrayContext::disabled()
         }

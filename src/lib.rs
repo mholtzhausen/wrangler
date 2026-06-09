@@ -42,9 +42,14 @@ use ui::{run_ui, UiAction, UiConfig};
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    session_env::restore_invoking_user_session();
 
     let cli = Cli::parse();
+
+    if cli.sudo {
+        session_env::reexec_with_sudo()?;
+    }
+
+    session_env::restore_invoking_user_session();
 
     match &cli.command {
         Some(Commands::Install(opts)) => return binary_install::install(opts),

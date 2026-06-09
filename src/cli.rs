@@ -85,6 +85,10 @@ pub struct Cli {
     #[arg(long)]
     pub cgroups: bool,
 
+    /// Run as root via sudo (enables cgroups; tray runs in your desktop session)
+    #[arg(long)]
+    pub sudo: bool,
+
     /// Run in background without TUI (monitor + throttle; tray enabled unless --no-tray)
     #[arg(long, visible_alias = "tray")]
     pub daemon: bool,
@@ -129,8 +133,12 @@ impl Cli {
             grouping: self.grouping.unwrap_or(file.grouping),
             protected_apps: file.protected_apps.clone(),
             interval: Duration::from_millis(self.interval.unwrap_or(file.interval_ms)),
-            cgroups: self.cgroups || file.use_cgroups,
+            cgroups: self.cgroups || file.use_cgroups || self.privileged_daemon(),
         }
+    }
+
+    pub fn privileged_daemon(&self) -> bool {
+        self.sudo && nix::unistd::geteuid().is_root()
     }
 
     pub fn daemon_mode(&self) -> bool {
@@ -180,6 +188,7 @@ mod tests {
             interval: Some(750),
             grouping: None,
             cgroups: false,
+            sudo: false,
             daemon: false,
             foreground: false,
             no_tray: false,
@@ -210,6 +219,7 @@ mod tests {
             interval: None,
             grouping: None,
             cgroups: false,
+            sudo: false,
             daemon: false,
             foreground: false,
             no_tray: false,
@@ -228,6 +238,14 @@ mod tests {
         assert!(cli.daemon_mode());
         assert!(cli.tray_enabled());
         assert!(!cli.no_tray);
+    }
+
+    #[test]
+    fn tray_sudo_flag_parses() {
+        let cli = Cli::try_parse_from(["wrangler", "--tray", "--sudo"]).unwrap();
+        assert!(cli.daemon_mode());
+        assert!(cli.tray_enabled());
+        assert!(cli.sudo);
     }
 
     #[test]
