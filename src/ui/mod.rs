@@ -1,4 +1,4 @@
-use crate::app::{AppGroupInfo, AppState, ProcessInfo};
+use crate::app::{AppGroupInfo, AppState, GroupBehaviorRecord, ProcessInfo};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     backend::CrosstermBackend,
@@ -65,7 +65,10 @@ pub async fn run_ui(
             clamp_table_offset(
                 &mut table_state,
                 display_row_count(&state, view_mode, &expanded_groups),
-                table_viewport_rows(Rect::new(0, 0, size.width, size.height)),
+                table_viewport_rows(
+                    Rect::new(0, 0, size.width, size.height),
+                    bad_actors_panel_height(size.height, bad_actors_row_count(&state)),
+                ),
             );
             dirty = true;
         }
@@ -74,7 +77,12 @@ pub async fn run_ui(
             break;
         }
 
-        let viewport = table_viewport_rows(terminal.size()?.into());
+        let terminal_size = terminal.size()?;
+        let footer_height = bad_actors_panel_height(terminal_size.height, bad_actors_row_count(&state));
+        let viewport = table_viewport_rows(
+            Rect::new(0, 0, terminal_size.width, terminal_size.height),
+            footer_height,
+        );
         while let Some(code) = poll_key_event()? {
             if handle_key(
                 code,
@@ -130,7 +138,10 @@ pub async fn run_ui(
                     clamp_table_offset(
                         &mut table_state,
                         display_row_count(&state, view_mode, &expanded_groups),
-                        table_viewport_rows(Rect::new(0, 0, size.width, size.height)),
+                        table_viewport_rows(
+                            Rect::new(0, 0, size.width, size.height),
+                            bad_actors_panel_height(size.height, bad_actors_row_count(&state)),
+                        ),
                     );
                     terminal.draw(|f| draw_ui(
                         f,
@@ -395,10 +406,53 @@ fn row_to_cells<'a>(
     }
 }
 
-/// Middle pane height minus block borders and header row.
-fn table_viewport_rows(area: Rect) -> usize {
-    let middle = area.height.saturating_sub(3 + 5);
+/// Middle pane height minus header block and bad-actors panel.
+fn table_viewport_rows(area: Rect, footer_height: u16) -> usize {
+    let middle = area.height.saturating_sub(3 + footer_height);
     middle.saturating_sub(3).max(1) as usize
+}
+
+const BAD_ACTORS_MAX_LINES: usize = 10;
+
+fn bad_actors_row_count(state: &AppState) -> usize {
+    state.group_behavior.len().max(1)
+}
+
+fn bad_actors_content_lines(window_height: u16, entry_count: usize) -> usize {
+    let max_by_window = (window_height as usize / 2).saturating_sub(3);
+    let cap = BAD_ACTORS_MAX_LINES.min(max_by_window.max(1));
+    entry_count.max(1).min(cap)
+}
+
+fn bad_actors_panel_height(window_height: u16, entry_count: usize) -> u16 {
+    let content = bad_actors_content_lines(window_height, entry_count);
+    (content + 3) as u16
+}
+
+fn format_throttle_duration(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn bad_actor_row(record: &GroupBehaviorRecord) -> Row<'static> {
+    let status = if record.currently_throttled {
+        "active"
+    } else {
+        "idle"
+    };
+    Row::new(vec![
+        Cell::from(record.name.clone()),
+        Cell::from(record.times_throttled.to_string()),
+        Cell::from(format!("{:.1}%", record.peak_cpu)),
+        Cell::from(format!("{:.1}%", record.last_cpu)),
+        Cell::from(format_throttle_duration(record.throttle_seconds)),
+        Cell::from(status),
+    ])
 }
 
 fn clamp_table_offset(state: &mut TableState, row_count: usize, viewport: usize) {
@@ -436,13 +490,15 @@ fn draw_ui(
     expanded_groups: &HashSet<u32>,
 ) {
     let area = f.area();
+    let footer_height = bad_actors_panel_height(area.height, bad_actors_row_count(state));
+    let content_lines = bad_actors_content_lines(area.height, bad_actors_row_count(state));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
-            Constraint::Length(5),
+            Constraint::Length(footer_height),
         ])
         .split(area);
 
@@ -550,36 +606,48 @@ fn draw_ui(
         );
     }
 
-    let throttled_groups: Vec<String> = state
-        .throttled_groups
-        .iter()
-        .map(|g| format!("{} [{}] ({:.0}%)", g.name, g.group_key, g.cpu_total))
-        .collect();
-    let recent_log: Vec<String> = state
-        .throttle_log
-        .iter()
-        .rev()
-        .take(3)
-        .map(|e| format!("{}: {}", e.pid, e.message))
-        .collect();
+    let ranked = state.top_bad_actors(content_lines);
+    let rows: Vec<Row> = if ranked.is_empty() {
+        vec![Row::new(vec![Cell::from("No throttle events yet")])]
+    } else {
+        ranked.iter().map(|record| bad_actor_row(record)).collect()
+    };
 
-    let mut footer_text = format!(
-        "Pressure >= {:.0}% | Throttled: [{}] | Protected: {}",
-        state.pressure_threshold,
-        throttled_groups.join(", "),
-        state.protected_apps.len(),
+    let header = Row::new(vec![
+        Cell::from("Application").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Times").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Peak %").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Last %").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Throttled").style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from("Status").style(Style::default().add_modifier(Modifier::BOLD)),
+    ]);
+
+    let mut title = format!(
+        " Bad Actors (pressure >= {:.0}%) ",
+        state.pressure_threshold
     );
     if let Some(err) = &state.last_error {
-        footer_text.push_str(&format!(" | Error: {err}"));
-    }
-    if !recent_log.is_empty() {
-        footer_text.push_str(&format!(" | Log: {}", recent_log.join(" | ")));
+        title.push_str(&format!("| Error: {err} "));
     }
 
-    let footer = Paragraph::new(footer_text).block(
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(14),
+            Constraint::Length(6),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(10),
+            Constraint::Length(6),
+        ],
+    )
+    .header(header)
+    .column_spacing(1)
+    .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Mitigation Logs "),
+            .title(title),
     );
-    f.render_widget(footer, chunks[2]);
+
+    f.render_widget(table, chunks[2]);
 }

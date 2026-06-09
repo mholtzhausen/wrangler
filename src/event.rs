@@ -3,6 +3,7 @@ use crate::policy::GroupingMode;
 use crate::policy::machine_cpu_budget;
 use crate::throttle::{run_signal_governor, ThrottleBackend};
 use std::collections::HashMap;
+use std::time::Instant;
 use tokio::sync::{mpsc, watch, Mutex};
 
 pub enum HubCommand {
@@ -89,6 +90,7 @@ pub fn spawn_event_hub(
             protected_apps,
         );
         let mut active: HashMap<u32, ActiveGroupThrottle> = HashMap::new();
+        let mut throttle_started: HashMap<u32, Instant> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -97,6 +99,7 @@ pub fn spawn_event_hub(
                         cmd,
                         &mut state,
                         &mut active,
+                        &mut throttle_started,
                         &state_tx,
                         &throttle_tx,
                         &backend,
@@ -124,6 +127,7 @@ async fn handle_command(
     cmd: HubCommand,
     state: &mut AppState,
     active: &mut HashMap<u32, ActiveGroupThrottle>,
+    throttle_started: &mut HashMap<u32, Instant>,
     state_tx: &watch::Sender<AppState>,
     throttle_tx: &mpsc::Sender<ThrottleEvent>,
     backend: &std::sync::Arc<Mutex<ThrottleBackend>>,
@@ -140,6 +144,7 @@ async fn handle_command(
             state.groups = groups;
             state.global_cpu = global_cpu;
             state.num_cores = num_cores;
+            state.refresh_group_behavior_from_snapshot();
             broadcast(state_tx, state);
         }
         HubCommand::StartThrottleGroup {
@@ -205,10 +210,12 @@ async fn handle_command(
 
             state.throttled_groups.push(ThrottledGroupInfo {
                 group_key,
-                name,
+                name: name.clone(),
                 pids,
                 cpu_total,
             });
+            state.record_throttle_start(group_key, name, cpu_total);
+            throttle_started.insert(group_key, Instant::now());
             state.sync_throttled_pids();
             let _ = throttle_tx
                 .send(ThrottleEvent::Started { group_key })
@@ -282,6 +289,10 @@ async fn handle_command(
                 use_cgroups,
             )
             .await;
+            if let Some(started) = throttle_started.remove(&group_key) {
+                let elapsed = started.elapsed().as_secs();
+                state.record_throttle_stop(group_key, elapsed);
+            }
             state
                 .throttled_groups
                 .retain(|group| group.group_key != group_key);
@@ -307,6 +318,9 @@ async fn handle_command(
                 .map(|(key, entry)| (*key, entry.pids.clone()))
                 .collect();
             for (group_key, pids) in groups {
+                if let Some(started) = throttle_started.remove(&group_key) {
+                    state.record_throttle_stop(group_key, started.elapsed().as_secs());
+                }
                 if let Some(entry) = active.remove(&group_key) {
                     entry.cancel.cancel();
                 }
@@ -356,21 +370,16 @@ fn handle_throttle_event(
     state_tx: &watch::Sender<AppState>,
 ) {
     match event {
-        ThrottleEvent::Started { group_key } => {
-            state.push_log(group_key, "group throttle started");
-            broadcast(state_tx, state);
-        }
-        ThrottleEvent::Synced { group_key } => {
-            state.push_log(group_key, "group membership synced");
-            broadcast(state_tx, state);
-        }
-        ThrottleEvent::Stopped { group_key } => {
-            state.push_log(group_key, "group throttle stopped");
-            broadcast(state_tx, state);
-        }
+        ThrottleEvent::Started { .. } | ThrottleEvent::Synced { .. } | ThrottleEvent::Stopped { .. } => {}
         ThrottleEvent::Error { group_key, message } => {
             state.last_error = Some(format!("group {group_key}: {message}"));
-            state.push_log(group_key, format!("error: {message}"));
+            if let Some(record) = state
+                .group_behavior
+                .iter_mut()
+                .find(|record| record.group_key == group_key)
+            {
+                record.currently_throttled = false;
+            }
             active.remove(&group_key);
             state
                 .throttled_groups

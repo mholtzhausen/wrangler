@@ -83,9 +83,14 @@ pub struct ThrottledGroupInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ThrottleLogEntry {
-    pub pid: u32,
-    pub message: String,
+pub struct GroupBehaviorRecord {
+    pub group_key: u32,
+    pub name: String,
+    pub times_throttled: u32,
+    pub peak_cpu: f32,
+    pub last_cpu: f32,
+    pub throttle_seconds: u64,
+    pub currently_throttled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,7 +106,7 @@ pub struct AppState {
     pub grouping: String,
     pub protected_apps: Vec<String>,
     pub throttle_backend: String,
-    pub throttle_log: Vec<ThrottleLogEntry>,
+    pub group_behavior: Vec<GroupBehaviorRecord>,
     pub last_error: Option<String>,
     pub quitting: bool,
 }
@@ -126,7 +131,7 @@ impl AppState {
             grouping: grouping.into(),
             protected_apps,
             throttle_backend: throttle_backend.into(),
-            throttle_log: Vec::new(),
+            group_behavior: Vec::new(),
             last_error: None,
             quitting: false,
         }
@@ -146,15 +151,82 @@ impl AppState {
             .any(|group| group.group_key == group_key)
     }
 
-    pub fn push_log(&mut self, pid: u32, message: impl Into<String>) {
-        self.throttle_log.push(ThrottleLogEntry {
-            pid,
-            message: message.into(),
-        });
-        if self.throttle_log.len() > 50 {
-            let drain = self.throttle_log.len() - 50;
-            self.throttle_log.drain(0..drain);
+    pub fn record_throttle_start(&mut self, group_key: u32, name: impl Into<String>, cpu: f32) {
+        let name = name.into();
+        if let Some(record) = self
+            .group_behavior
+            .iter_mut()
+            .find(|record| record.group_key == group_key)
+        {
+            record.name = name;
+            record.times_throttled = record.times_throttled.saturating_add(1);
+            record.peak_cpu = record.peak_cpu.max(cpu);
+            record.last_cpu = cpu;
+            record.currently_throttled = true;
+            return;
         }
+
+        self.group_behavior.push(GroupBehaviorRecord {
+            group_key,
+            name,
+            times_throttled: 1,
+            peak_cpu: cpu,
+            last_cpu: cpu,
+            throttle_seconds: 0,
+            currently_throttled: true,
+        });
+    }
+
+    pub fn record_throttle_stop(&mut self, group_key: u32, elapsed_secs: u64) {
+        let Some(record) = self
+            .group_behavior
+            .iter_mut()
+            .find(|record| record.group_key == group_key)
+        else {
+            return;
+        };
+        record.currently_throttled = false;
+        record.throttle_seconds = record.throttle_seconds.saturating_add(elapsed_secs);
+    }
+
+    pub fn refresh_group_behavior_from_snapshot(&mut self) {
+        for group in &self.groups {
+            let throttled = self.is_group_throttled(group.group_key);
+            let Some(record) = self
+                .group_behavior
+                .iter_mut()
+                .find(|record| record.group_key == group.group_key)
+            else {
+                continue;
+            };
+            record.name.clone_from(&group.name);
+            record.last_cpu = group.cpu_total;
+            if throttled {
+                record.peak_cpu = record.peak_cpu.max(group.cpu_total);
+            }
+        }
+    }
+
+    pub fn top_bad_actors(&self, limit: usize) -> Vec<&GroupBehaviorRecord> {
+        let mut ranked: Vec<&GroupBehaviorRecord> = self.group_behavior.iter().collect();
+        ranked.sort_by(|left, right| {
+            right
+                .times_throttled
+                .cmp(&left.times_throttled)
+                .then(
+                    right
+                        .peak_cpu
+                        .partial_cmp(&left.peak_cpu)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(
+                    right
+                        .throttle_seconds
+                        .cmp(&left.throttle_seconds),
+                )
+        });
+        ranked.truncate(limit);
+        ranked
     }
 }
 
@@ -170,5 +242,20 @@ mod tests {
             "alice,bob"
         );
         assert_eq!(summarize_identities([].into_iter()), "-");
+    }
+
+    #[test]
+    fn top_bad_actors_ranks_by_throttle_count_then_peak_cpu() {
+        let mut state = AppState::new(40.0, 85.0, "signal", "tree", Vec::new());
+        state.record_throttle_start(1, "chrome", 55.0);
+        state.record_throttle_start(2, "firefox", 90.0);
+        state.record_throttle_start(2, "firefox", 70.0);
+        state.record_throttle_stop(1, 3);
+
+        let top = state.top_bad_actors(2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].group_key, 2);
+        assert_eq!(top[0].times_throttled, 2);
+        assert_eq!(top[1].group_key, 1);
     }
 }
